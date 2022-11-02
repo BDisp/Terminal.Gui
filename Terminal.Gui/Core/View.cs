@@ -3077,6 +3077,12 @@ namespace Terminal.Gui {
 			return top;
 		}
 
+		/// <summary>
+		/// Check if the <paramref name="method"/> is overridden in the <paramref name="view"/>.
+		/// </summary>
+		/// <param name="view">The view.</param>
+		/// <param name="method">The method name.</param>
+		/// <returns><see langword="true"/> if it's overridden, <see langword="false"/> otherwise.</returns>
 		public bool IsOverridden (View view, string method)
 		{
 			Type t = view.GetType ();
