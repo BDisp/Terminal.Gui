@@ -119,8 +119,11 @@ namespace UICatalog {
 			}
 		}
 
-		public KeyBindingsDialog () : base("Keybindings", 50,10)
+		public KeyBindingsDialog () 
 		{
+			Title = "Key Bindings";
+			Width = 60;
+			Height = 25;
 			if(ViewTracker.Instance == null) {
 				ViewTracker.Initialize ();
 			}
@@ -130,7 +133,7 @@ namespace UICatalog {
 
 			commandsListView = new ListView (commands) {
 				Width = Dim.Percent (50),
-				Height = Dim.Percent (100) - 1,
+				Height = Dim.Percent (100) - 3,
 			};
 
 			Add (commandsListView);
@@ -175,7 +178,9 @@ namespace UICatalog {
 			Key? key = null;
 
 			// prompt user to hit a key
-			var dlg = new Dialog ("Enter Key");
+			var dlg = new Dialog ("Type Key");
+			dlg.Height = 10;
+			dlg.Width = 30;
 			dlg.KeyPress += (k) => {
 				key = k.KeyEvent.Key;
 				Application.RequestStop ();

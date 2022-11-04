@@ -99,6 +99,7 @@ namespace Terminal.Gui {
 		{
 			TextAlignment = TextAlignment.Centered;
 			VerticalTextAlignment = VerticalTextAlignment.Middle;
+			UseEffect3DAnimation = DefaultUseEffect3DAnimation;
 
 			HotKeySpecifier = new Rune ('_');
 
@@ -158,10 +159,20 @@ namespace Terminal.Gui {
 			}
 		}
 
-		private bool useEffect3DAnimation;
+		private static bool defaultUseEffect3DAnimation = false;
+		/// <summary>
+		/// Gets or sets the default setting for <see cref="UseEffect3DAnimation"/>.
+		/// </summary>
+		public static bool DefaultUseEffect3DAnimation { get => defaultUseEffect3DAnimation; set => defaultUseEffect3DAnimation = value; }
+
+		private bool useEffect3DAnimation = DefaultUseEffect3DAnimation;
 
 		/// <summary>
-		/// Gets or sets if the button will have a <see cref="Border.effect3D"/> with animation.
+		/// Gets or sets if the button will have a <see cref="Border.Effect3D"/> with animation. 
+		/// <remarks>
+		/// If set to <see langword="true"/> the Button will require one row below and to the right to render
+		/// correctly. 
+		/// </remarks>
 		/// </summary>
 		public bool UseEffect3DAnimation {
 			get => useEffect3DAnimation;

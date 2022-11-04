@@ -250,7 +250,6 @@ namespace Terminal.Gui {
 			}
 			int textWidth = Math.Min (TextFormatter.MaxWidth (message, maxWidthLine), Application.Driver.Cols);
 			int textHeight = TextFormatter.MaxLines (message, textWidth); // message.Count (ustring.Make ('\n')) + 1;
-			int msgboxHeight = Math.Min (Math.Max (1, textHeight) + 4, Application.Driver.Rows); // textHeight + (top + top padding + buttons + bottom)
 
 			// Create button array for Dialog
 			int count = 0;
@@ -266,6 +265,9 @@ namespace Terminal.Gui {
 				buttonList.Add (b);
 				count++;
 			}
+
+			int buttonHeight = buttonList.Count == 0 ? 0 : buttonList [0].UseEffect3DAnimation ? 2 : 1;
+			int msgboxHeight = Math.Min (Math.Max (1, textHeight) + buttonHeight + 4, Application.Driver.Rows); // textHeight + (top + top padding + buttons + bottom)
 
 			// Create Dialog (retain backwards compat by supporting specifying height/width)
 			Dialog d;
@@ -290,10 +292,10 @@ namespace Terminal.Gui {
 					LayoutStyle = LayoutStyle.Computed,
 					TextAlignment = TextAlignment.Centered,
 					X = Pos.Center (),
-					Y = Pos.Center (),
+					Y = Pos.Center () - (textHeight / 2) - 1,
 					Width = Dim.Fill (),
-					Height = Dim.Fill (1),
-					AutoSize = false
+					Height = textHeight,
+					AutoSize = false,
 				};
 				d.Add (l);
 			}

@@ -27,9 +27,9 @@ namespace UICatalog.Scenarios {
 			var defaultButton = new Button ("_Quit") {
 				X = Pos.Center (),
 				//TODO: Change to use Pos.AnchorEnd()
-				Y = Pos.Bottom (Win) - 3,
 				IsDefault = true,
 			};
+			defaultButton.Y = Pos.AnchorEnd (1) - (defaultButton.UseEffect3DAnimation ? 1 : 0);
 			defaultButton.Clicked += () => Application.RequestStop ();
 			Win.Add (defaultButton);
 
@@ -115,14 +115,14 @@ namespace UICatalog.Scenarios {
 				X = 0,
 				Y = Pos.Bottom (removeButton) + 1,
 				Width = Dim.Percent (50),
-				Height = 5
+				Height =  6 // top border + bottom border + top button + blank row + bottom button + blank row
 			};
 			Win.Add (computedFrame);
 
 			// Demonstrates how changing the View.Frame property can move Views
 			var moveBtn = new Button ("Move This \u263b Button _via Pos") {
 				X = 0,
-				Y = Pos.Center () - 1,
+				Y = 0,
 				Width = 30,
 				ColorScheme = Colors.Error,
 			};
@@ -136,7 +136,7 @@ namespace UICatalog.Scenarios {
 			// Demonstrates how changing the View.Frame property can SIZE Views (#583)
 			var sizeBtn = new Button ("Size This \u263a Button _via Pos") {
 				X = 0,
-				Y = Pos.Center () + 1,
+				Y = 2,
 				Width = 30,
 				ColorScheme = Colors.Error,
 			};
@@ -150,7 +150,7 @@ namespace UICatalog.Scenarios {
 				X = Pos.Right (computedFrame),
 				Y = Pos.Bottom (removeButton) + 1,
 				Width = Dim.Fill (),
-				Height = 5
+				Height = 6 // top border + bottom border + top button + blank row + bottom button + blank row
 			};
 			Win.Add (absoluteFrame);
 

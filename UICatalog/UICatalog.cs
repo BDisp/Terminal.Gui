@@ -59,7 +59,7 @@ namespace UICatalog {
 
 		// If set, holds the scenario the user selected
 		private static Scenario _selectedScenario = null;
-		
+
 		private static bool _useSystemConsole = false;
 		private static ConsoleDriver.DiagnosticFlags _diagnosticFlags;
 		private static bool _heightAsBuffer = false;
@@ -175,6 +175,7 @@ namespace UICatalog {
 					new MenuItem ("_Quit", "Quit UI Catalog", () => Application.RequestStop(), null, null, Key.Q | Key.CtrlMask)
 				}),
 				new MenuBarItem ("_Color Scheme", CreateColorSchemeMenuItems()),
+				new MenuBarItem ("_Styles", CreateStylesMenuItems()),
 				new MenuBarItem ("Diag_nostics", CreateDiagnosticMenuItems()),
 				new MenuBarItem ("_Help", new MenuItem [] {
 					new MenuItem ("_gui.cs API Overview", "", () => OpenUrl ("https://gui-cs.github.io/Terminal.Gui/articles/overview.html"), null, null, Key.F1),
@@ -477,6 +478,21 @@ namespace UICatalog {
 			}
 		}
 
+		static MenuItem []  CreateStylesMenuItems ()
+		{
+			List<MenuItem> menuItems = new List<MenuItem> ();
+			var item = new MenuItem ();
+			item.Title = $"_Use Effect 3D Animation";
+			item.CheckType |= MenuItemCheckStyle.Checked;
+			item.Checked = Button.DefaultUseEffect3DAnimation ;
+			item.Action += () => {
+				Button.DefaultUseEffect3DAnimation = !item.Checked;
+				item.Checked = Button.DefaultUseEffect3DAnimation;
+			};
+			menuItems.Add (item);
+			return menuItems.ToArray ();
+		}
+
 		static ColorScheme _colorScheme;
 		static MenuItem [] CreateColorSchemeMenuItems ()
 		{
@@ -498,6 +514,7 @@ namespace UICatalog {
 			}
 			return menuItems.ToArray ();
 		}
+
 
 		private static void KeyDownHandler (View.KeyEventEventArgs a)
 		{

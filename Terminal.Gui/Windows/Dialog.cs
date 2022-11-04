@@ -163,9 +163,9 @@ namespace Terminal.Gui {
 				shiftLeft = (Bounds.Width - buttonsWidth - buttons.Count - 2) / 2 + 1;
 				for (int i = buttons.Count - 1; i >= 0; i--) {
 					Button button = buttons [i];
-					shiftLeft += button.Frame.Width + (i == buttons.Count - 1 ? 0 : 1);
+					shiftLeft += button.Frame.Width + (button.UseEffect3DAnimation ? 1 : 0) + (i == buttons.Count - 1 ? 0 : 1);
 					button.X = Pos.AnchorEnd (shiftLeft);
-					button.Y = Pos.AnchorEnd (1);
+					button.Y = Pos.AnchorEnd (button.UseEffect3DAnimation ? 2 : 1); 
 				}
 				break;
 
