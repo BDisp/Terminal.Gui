@@ -21,9 +21,9 @@
 - No flickering. The Cursor should blink/pulse at the rate dictated by the terminal. Typing, moving the mouse, view layout, etc... should not caue the cursor to flicker.
 - By default, the Cursor should not be visible. A View or View subclass should have to do anything (this is already the case) to keep the Cursor invisible.
 - Views that just want to show the cursor at a particular location in the Viewport should only have to:
-  - Declare a desired Cursor Style (e.g. "CursorStyle" or equivalent should be a property on `View`).
-  - Indicate the Cursor Locaiton when internal state dictates the location has changed (debatable if this should be in content or viewport-relative coords).
-  - Indicate Cursor Visibility (if internal state dictates a change of visibilty).
+  - Optionally, declare a desired Cursor Style. Set `Application.CursorStyle`.
+  - Indicate the Cursor Locaiton when internal state dictates the location has changed (debatable if this should be in content or viewport-relative coords). Just set `this.CursorPosition`.
+  - To hide the cursor, simply set `this.CursorPostion` to `null`.
 - The Cursor should only be visible in Views where
   - `Enabled == true`
   - `Visible == true`
