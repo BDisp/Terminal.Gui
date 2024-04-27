@@ -28,10 +28,33 @@
   - `Visible == true`
   - `CanFocus == true`
   - `this == SuperView.MostFocused`
+- If a `ConsoleDriver` supports Cursor Styles other than Default, they should be supported per-application (NOT View). 
 - Ensuring the cursor is visible or not should be handled by `Application`, not `View`.
 - General V2 Requirement: View sub-class code should NEVER call a `Driver.` API. Only `Application` and the `View` base class should call `ConsoleDriver` APIs; before we ship v2, all `ConsoleDriver` APIs will be made `internal`.
 
 ## Design
+
+### `View` Focus Changes
+
+It doesn't make sense the every View instance has it's own notion of `MostFocused`. The current implemention is overly complicated and fragile because the concept of "MostFocused" is handled by `View`. There can be only ONE "most focused" view in an application. `MostFocused` should be a property on `Application`.
+
+* Remove `View.MostFocused`
+* Change all references to access `Application.MostFocusedView` (see `Application` below)
+* Find all instances of `view._hasFocus = ` and change them to use `SetHasFocus` (today, anyplace that sets `_hasFocus` is a BUG!!).
+* Change `SetFocus`/`SetHasFocus` etc... such that if the focus is changed to a different view heirarchy, `Application.MostFocusedView` gets set appropriately. 
+
+**MORE THOUGHT REQUIRED HERE** - There be dragons given how `Toplevel` has `OnEnter/OnLeave` overrrides. The above needs more study, but is directioally correct.
+
+### `View` Cursor Changes
+* Add `public Point? CursorPosition`
+    - Backed with `private Point? _cursorPosition`
+    - If `!HasValue` the cursor is not visible
+    - If `HasValue` the cursor is visible at the Point.
+    - On set, if `value != _cursorPosition`, call `OnCursorPositionChanged()`
+* Add `public event EventHandler<LocaitonChangedEventArgs>? CursorPositionChanged`
+* Add `internal void OnCursorPositionChanged(LocationChangedEventArgs a)`
+  * Not virtual
+  * Fires `CursorPositionChanged`
 
 ### `ConsoleDriver`s
 
@@ -41,7 +64,7 @@
   * `internal int CursorStyle {get; internal set; }`
     - Backed with `private int _cursorStyle`
     - On set, calls `OnCursorStyleChanged()`
-  * Add `internal abstract void OnCursorPositionChanged()`
+  * Add `internal abstract void OnCursorStyleChanged()`
     - Called by `base` whenever the cursor style changes, but ONLY if `value != _cursorStyle`.
 
   * Add `internal virtual (int Id, string StyleName) []  GetCursorStyles()`
@@ -61,25 +84,46 @@
         - If `!HasValue` the cursor is not visible - does whatever is needed to make the cursor invisible.
         - If `HasValue` the cursor is visible at the `CursorPosition` - does whatever is needed to make the cursor visible (using `CursorStyle`).
 
+  * Update the drivers to simplify if possible.
+
 ### `Application`
 
-* Add `internal static View FocusdView {get; private set;}` - A cache of the view that is most focused.  
+* 
 
-* Add `internal bool UpdateCursor ()`
+* Add `internal static View FocusedView {get; private set;}` 
+  - Backed by `private static _focusedView`
+  - On set, 
+    - if `value != _focusedView` 
+        - Unsubscribe from `_focusedView.CursorPositionChanged`
+        - Subscribe to `value.CursorPositionChanged += CursorPositionChanged`        
+        - `_focusedView = value`
+        - Call `UpdateCursor` 
 
-Called when:
+* Add `internal bool CursorPositionChanged (object sender, LocationChangedEventArgs a)`
 
-- `FocusdView`
-  - Has changed to another View (should cover `FocusedView.Visible/Enable` changes)
-  - Has changed layout
-  - Has changeed it's `CursorPosition`
+    Called when:
 
-Does:
+    - `FocusedView`
+        - Has changed to another View (should cover `FocusedView.Visible/Enable` changes)
+        - Has changed layout - 
+        - Has changeed it's `CursorPosition`
+    - `CursorStyle` has changed
 
-- If `FocusedView is {}` and `FocusedView.CursorPosition` is visible (e.g. w/in `FocusedView.SuperView.Viewport`) 
-    - If driver cursor position has changed, call `Driver.UpdateCursor`
-    - If driver CursorVisibilty has changed, call `Driver.UpdateCursor`
-- Else
-    - makes driver cursor invisible
+    Does:
+
+    - If `FocusedView is {}` and `FocusedView.CursorPosition` is visible (e.g. w/in `FocusedView.SuperView.Viewport`) 
+        - Does `Driver.CursorPosition = ToScreen(FocusedView.CursorPosition)`
+    - Else
+        - Makes driver cursor invisible with `Driver.CursorPosition = null`
+
+* Add `public static int CursorStyle {get; internal set; }`
+  - Backed with `private static int _cursorStyle
+  - If `value != _cursorStyle`
+    - Calls `ConsoleDriver.CursorStyle = _cursorStyle` 
+    - Calls `UpdateCursor`
+
+* Add `public (int Id, string StyleName) []  GetCursorStyles()`
+  - Calls through to `ConsoleDriver.GetCursorStyles()`
+
 
 
