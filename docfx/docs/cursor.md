@@ -1,5 +1,7 @@
 # Proposed Design for a modern Cursor system in v2
 
+See end for list of issues this design addresses.
+
 ## Tenets for Cursor Support (Unless you know better ones...)
 
 1. **More GUI than Command Line**. The concept of a cursor on the command line of a terminal is intrinsically tied to enabling the user to know where keybaord import is going to impact text editing. TUI apps have many more modalities than text editing where the keyboard is used (e.g. scrolling through a `ColorPicker`). Terminal.Gui's cursor system is biased towards the broader TUI experiences.
@@ -85,7 +87,7 @@ It doesn't make sense the every View instance has it's own notion of `MostFocuse
         - If `!HasValue` the cursor is not visible - does whatever is needed to make the cursor invisible.
         - If `HasValue` the cursor is visible at the `CursorPosition` - does whatever is needed to make the cursor visible (using `CursorStyle`).
 
-  * Update the drivers to simplify if possible.
+  * Make sure the drivers only make the cursor visible (or leave it visible) when `CursorPosition` changes!
 
 ### `Application`
 
@@ -128,3 +130,33 @@ It doesn't make sense the every View instance has it's own notion of `MostFocuse
 
 
 
+# Issues with Current Design
+
+## `Driver.Row/Pos`, which are changed via `Move` serves two purposes that confuse each other:
+
+a) Where the next `AddRune` will put the next rune
+b) The current "Cursor Location"
+
+If most TUI apps acted like a command line where the visible cursor was always visible, this might make sense. But the fact that only a very few View subclasses we've seen actually care to show the cursor illustrates a problem:
+
+Any drawing causes the "Cursor Position" to be changed/lost. This means we have a ton of code that is constantly repositioning the cursor every MainLoop iteration.
+
+## The actual cursor position RARELY changes (relative to `Mainloop.Iteration`).
+
+Derived from abo`ve, the current design means we need to call `View.PositionCursor` every iteration. For some views this is a low-cost operation. For others it involves a lot of math. 
+
+This is just stupid. 
+
+## Flicker
+
+Related to the above, we need constantly Show/Hide the cursor every iteration. This causes ridiculous cursor flicker. 
+
+## `View.PositionCursor` is poorly spec'd and confusing to implement correctly
+
+Should a view call `base.PositionCursor`? If so, before or after doing stuff? 
+
+## Setting cursor visibility in `OnEnter` actually makes no sense
+
+First, leaving it up to views to do this is fragile.
+
+Second, when a View gets focus is but one of many places where cursor visibilty should be updated. 
