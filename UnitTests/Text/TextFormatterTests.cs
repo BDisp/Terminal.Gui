@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using Xunit.Abstractions;
+using static Terminal.Gui.SpinnerStyle;
 
 // Alias Console to MockConsole so we don't accidentally use Console
 
@@ -961,30 +962,43 @@ ssb
         Assert.Equal (1, TextFormatter.GetMaxColsForWidth (text, 1));
     }
 
+
     [Theory]
+    [InlineData (new [] { "0123456789" }, 1)]
+    [InlineData (new [] { "Hello World" }, 1)]
+    [InlineData (new [] { "Hello", "World" }, 2)]
+    [InlineData (new [] { "こんにちは", "世界" }, 4)]
+    public void GetColumnsRequiredForVerticalText_List_GetsWidth (IEnumerable<string> text, int expectedWidth)
+    {
+        Assert.Equal (expectedWidth, TextFormatter.GetColumnsRequiredForVerticalText (text.ToList ()));
+
+    }
+
+    [Theory]
+    [InlineData (new [] { "Hello World" }, 1, 0, 1, 1)]
     [InlineData (new [] { "Hello", "World" }, 2, 1, 1, 1)]
     [InlineData (new [] { "こんにちは", "世界" }, 4, 1, 1, 2)]
-    public void GetWidestLineLength_List_Simple_And_Wide_Runes (
+    public void GetColumnsRequiredForVerticalText_List_Simple_And_Wide_Runes (
         IEnumerable<string> text,
-        int width,
+        int expectedWidth,
         int index,
         int length,
-        int indexWidth
+        int expectedIndexWidth
     )
     {
-        Assert.Equal (width, TextFormatter.GetWidestLineLength (text.ToList ()));
-        Assert.Equal (indexWidth, TextFormatter.GetWidestLineLength (text.ToList (), index, length));
+        Assert.Equal (expectedWidth, TextFormatter.GetColumnsRequiredForVerticalText (text.ToList ()));
+        Assert.Equal (expectedIndexWidth, TextFormatter.GetColumnsRequiredForVerticalText (text.ToList (), index, length));
     }
 
     [Fact]
-    public void GetWidestLineLength_List_With_Combining_Runes ()
+    public void GetColumnsRequiredForVerticalText_List_With_Combining_Runes ()
     {
         List<string> text = new () { "Les Mis", "e\u0328\u0301", "rables" };
-        Assert.Equal (1, TextFormatter.GetWidestLineLength (text, 1, 1));
+        Assert.Equal (1, TextFormatter.GetColumnsRequiredForVerticalText (text, 1, 1));
     }
 
     [Fact]
-    public void GetWidestLineLength_With_Combining_Runes ()
+    public void GetColumnsRequiredForVerticalText_With_Combining_Runes ()
     {
         var text = "Les Mise\u0328\u0301rables";
         Assert.Equal (1, TextFormatter.GetWidestLineLength (text, 1, 1));
@@ -3297,5 +3311,169 @@ ssb
                      expectedClippedWidth >= (wrappedLines.Count > 0 ? wrappedLines.Max (l => l.GetColumns ()) : 0)
                     );
         Assert.Equal (resultLines, wrappedLines);
+    }
+
+
+    [SetupFakeDriver]
+    [Theory]
+    [InlineData ("A", 0, false, "")]
+    [InlineData ("A", 1, false, "A")]
+    [InlineData ("A", 2, false, "A")]
+    [InlineData ("AB", 1, false, "A")]
+    [InlineData ("AB", 2, false, "AB")]
+    [InlineData ("ABC", 3, false, "ABC")]
+    [InlineData ("ABC", 4, false, "ABC")]
+    [InlineData ("ABC", 6, false, "ABC")]
+
+    [InlineData ("A", 0, true, "")]
+    [InlineData ("A", 1, true, "A")]
+    [InlineData ("A", 2, true, "A")]
+    [InlineData ("AB", 1, true, "A")]
+    [InlineData ("AB", 2, true, "AB")]
+    [InlineData ("ABC", 3, true, "ABC")]
+    [InlineData ("ABC", 4, true, "ABC")]
+    [InlineData ("ABC", 6, true, "ABC")]
+    public void Draw_Horizontal_Left (string text, int width, bool autoSize, string expectedText)
+
+    {
+        TextFormatter tf = new ()
+        {
+            Text = text,
+            Alignment = TextAlignment.Left,
+            AutoSize = autoSize,
+        };
+
+        if (!autoSize)
+        {
+            tf.Size = new Size (width, 1);
+        }
+        tf.Draw (new Rectangle (0, 0, width, 1), Attribute.Default, Attribute.Default);
+
+        TestHelpers.AssertDriverContentsWithFrameAre (expectedText, _output);
+    }
+
+    [SetupFakeDriver]
+    [Theory]
+    [InlineData ("A", 0, false, "")]
+    [InlineData ("A", 1, false, "A")]
+    [InlineData ("A", 2, false, " A")]
+    [InlineData ("AB", 1, false, "A")]
+    [InlineData ("AB", 2, false, "AB")]
+    [InlineData ("ABC", 3, false, "ABC")]
+    [InlineData ("ABC", 4, false, " ABC")]
+    [InlineData ("ABC", 6, false, "   ABC")]
+
+    [InlineData ("A", 0, true, "")]
+    [InlineData ("A", 1, true, "A")]
+    [InlineData ("A", 2, true, " A")]
+    [InlineData ("AB", 1, true, "")] // BUGBUG: This is wrong, it should be "A"
+    [InlineData ("AB", 2, true, "AB")]
+    [InlineData ("ABC", 3, true, "ABC")]
+    [InlineData ("ABC", 4, true, " ABC")]
+    [InlineData ("ABC", 6, true, "   ABC")]
+    public void Draw_Horizontal_Right (string text, int width, bool autoSize, string expectedText)
+    {
+        TextFormatter tf = new ()
+        {
+            Text = text,
+            Alignment = TextAlignment.Right,
+            AutoSize = autoSize,
+        };
+
+        if (!autoSize)
+        {
+            tf.Size = new Size (width, 1);
+        }
+
+        tf.Draw (new Rectangle (Point.Empty, new (width, 1)), Attribute.Default, Attribute.Default);
+        TestHelpers.AssertDriverContentsWithFrameAre (expectedText, _output);
+    }
+
+    [SetupFakeDriver]
+    [Theory]
+    [InlineData ("A", 0, false, "")]
+    [InlineData ("A", 1, false, "A")]
+    [InlineData ("A", 2, false, "A")]
+    [InlineData ("A", 3, false, " A")]
+    [InlineData ("AB", 1, false, "A")]
+    [InlineData ("AB", 2, false, "AB")]
+    [InlineData ("ABC", 3, false, "ABC")]
+    [InlineData ("ABC", 4, false, "ABC")]
+    [InlineData ("ABC", 5, false, " ABC")]
+    [InlineData ("ABC", 6, false, " ABC")]
+    [InlineData ("ABC", 9, false, "   ABC")]
+
+    [InlineData ("A", 0, true, "")]
+    [InlineData ("A", 1, true, "A")]
+    [InlineData ("A", 2, true, "A")]
+    [InlineData ("A", 3, true, " A")]
+    [InlineData ("AB", 1, true, "A")]
+    [InlineData ("AB", 2, true, "AB")]
+    [InlineData ("ABC", 3, true, "ABC")]
+    [InlineData ("ABC", 4, true, "ABC")]
+    [InlineData ("ABC", 5, true, " ABC")]
+    [InlineData ("ABC", 6, true, " ABC")]
+    [InlineData ("ABC", 9, true, "   ABC")]
+    public void Draw_Horizontal_Centered (string text, int width, bool autoSize, string expectedText)
+    {
+        TextFormatter tf = new ()
+        {
+            Text = text,
+            Alignment = TextAlignment.Centered,
+            AutoSize = autoSize,
+        };
+
+        if (!autoSize)
+        {
+            tf.Size = new Size (width, 1);
+        }
+        tf.Draw (new Rectangle (0, 0, width, 1), Attribute.Default, Attribute.Default);
+
+        TestHelpers.AssertDriverContentsWithFrameAre (expectedText, _output);
+    }
+
+    [SetupFakeDriver]
+    [Theory]
+    [InlineData ("A", 0, false, "")]
+    [InlineData ("A", 1, false, "A")]
+    [InlineData ("A", 2, false,"A")]
+    [InlineData ("A B", 3, false,"A B")]
+    [InlineData ("A B", 1, false,"A")]
+    [InlineData ("A B", 2, false,"A")]
+    [InlineData ("A B", 3, false,"A B")]
+    [InlineData ("A B", 4, false,"A  B")]
+    [InlineData ("A B", 5, false,"A   B")]
+    [InlineData ("A B", 6, false,"A    B")]
+    [InlineData ("A B", 10,false,"A        B")]
+    [InlineData ("ABC ABC", 10, false, "ABC    ABC")]
+
+    [InlineData ("A", 0, true, "")]
+    [InlineData ("A", 1, true, "A")]
+    [InlineData ("A", 2, true, "A")]
+    [InlineData ("A B", 3, true, "A B")]
+    [InlineData ("A B", 1, true, "A")]
+    [InlineData ("A B", 2, true, "A")]
+    [InlineData ("A B", 3, true, "A B")]
+    [InlineData ("A B", 4, true, "A B")]
+    [InlineData ("A B", 5, true, "A B")]
+    [InlineData ("A B", 6, true, "A B")]
+    [InlineData ("A B", 10, true, "A B")]
+    [InlineData ("ABC ABC", 10, true, "ABC ABC")]
+    public void Draw_Horizontal_Justified (string text, int width, bool autoSize, string expectedText)
+    {
+        TextFormatter tf = new ()
+        {
+            Text = text,
+            Alignment = TextAlignment.Justified,
+            AutoSize = autoSize,
+        };
+
+        if (!autoSize)
+        {
+            tf.Size = new Size (width, 1);
+        }
+        tf.Draw (new Rectangle (0, 0, width, 1), Attribute.Default, Attribute.Default);
+
+        TestHelpers.AssertDriverContentsWithFrameAre (expectedText, _output);
     }
 }
