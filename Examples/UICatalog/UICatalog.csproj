@@ -42,6 +42,7 @@
         <ProjectReference Include="..\..\Terminal.Gui\Terminal.Gui.csproj" />
     </ItemGroup>
     <ItemGroup>
+      <PackageReference Include="Microsoft.Extensions.Logging" VersionOverride="10.0.6" />
         <Using Include="System.Drawing.Rectangle" Alias="Rectangle" />
         <Using Include="System.Drawing.RectangleF" Alias="RectangleF" />
         <Using Include="System.Drawing.Point" Alias="Point" />
