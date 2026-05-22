@@ -81,7 +81,7 @@ jobs:
       run: echo "${{ steps.gitversion.outputs.SemVer }}" > version.txt
 
     - name: Upload published-version artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: published-version
         path: version.txt
