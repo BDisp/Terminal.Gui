@@ -204,6 +204,7 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator where TI
                                           Logging.Trace ($"app: SetDefaultAttribute ({attribute})");
 
                                           _driver.SetDefaultAttribute (attribute);
+                                          app?.TopRunnableView?.SetNeedsDraw ();
                                       });
             }
             catch (Exception ex)
@@ -241,9 +242,9 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator where TI
             Logging.Warning ($"Kitty keyboard protocol detection failed: {ex.Message}");
         }
 
-        if (startupGate is { })
+        if (startupGate is { } && !_driver.IsLegacyConsole)
         {
-            QueueDeviceAttributesProbe (startupGate);
+            QueueDeviceAttributesProbe (_driver, startupGate);
         }
 
         // Detect sixel support via DAR query.
@@ -286,21 +287,23 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator where TI
         Trace.Lifecycle (app?.MainThreadId.ToString (), "Driver", $"_input: {_input}, _output: {_output}");
     }
 
-    private void QueueDeviceAttributesProbe (IAnsiStartupGate startupGate)
+    internal static void QueueDeviceAttributesProbe (IDriver driver, IAnsiStartupGate startupGate)
     {
-        IDisposable deviceAttributesQueryCompletionHandle = startupGate.RegisterQuery (AnsiStartupQuery.DeviceAttributesPrimary,
-                                                                                       TimeSpan.FromSeconds (1));
-
         AnsiEscapeSequenceRequest request = new ()
         {
             Request = EscSeqUtils.CSI_SendDeviceAttributes.Request,
             Value = EscSeqUtils.CSI_SendDeviceAttributes.Value,
             Terminator = EscSeqUtils.CSI_SendDeviceAttributes.Terminator,
-            ResponseReceived = _ => deviceAttributesQueryCompletionHandle.Dispose (),
-            Abandoned = deviceAttributesQueryCompletionHandle.Dispose
+            ResponseReceived = _ =>
+                               {
+                                   // DA1 follows the initial kitty and foreground-color queries.
+                                   // Release their render gate; late color replies can still update the scheme.
+                                   startupGate.MarkComplete (AnsiStartupQuery.KittyKeyboard);
+                                   startupGate.MarkComplete (AnsiStartupQuery.TerminalColors);
+                               }
         };
 
-        _driver?.QueueAnsiRequest (request);
+        driver.QueueAnsiRequest (request);
     }
 
     /// <summary>

@@ -28,6 +28,28 @@ public class KittyKeyboardProtocolDetectorTests
         driverMock.Verify (d => d.QueueAnsiRequest (It.IsAny<AnsiEscapeSequenceRequest> ()), Times.Once);
     }
 
+    // Codex - GPT-6
+    [Fact]
+    public void Enable_DoesNotBlockStartupWhileConfirmingFlags ()
+    {
+        Mock<IDriver> driverMock = new (MockBehavior.Strict);
+        using AnsiOutput output = new ();
+        AnsiStartupGate startupGate = new ();
+        AnsiEscapeSequenceRequest? capturedRequest = null;
+
+        driverMock.Setup (d => d.IsLegacyConsole).Returns (false);
+        driverMock.Setup (d => d.GetOutput ()).Returns (output);
+        driverMock.Setup (d => d.QueueAnsiRequest (It.IsAny<AnsiEscapeSequenceRequest> ()))
+                  .Callback<AnsiEscapeSequenceRequest> (request => capturedRequest = request);
+
+        KittyKeyboardProtocolDetector detector = new (driverMock.Object, startupGate);
+        detector.Enable (EscSeqUtils.KittyKeyboardRequestedFlags);
+
+        Assert.NotNull (capturedRequest);
+        Assert.True (startupGate.IsReady);
+        Assert.Empty (startupGate.PendingQueries);
+    }
+
     [Fact]
     public void Detect_QueuesKittyQuery_AndReturnsSupportedResult_WhenTerminalResponds ()
     {

@@ -986,7 +986,8 @@ All coordinate offsetting derives from `App.Screen`:
 Init()
   ├─ AnsiOutput: skip CSI ?1049h (stay in primary buffer)
   ├─ AnsiSizeMonitor: send ESC[6n (CPR) to discover cursor row
-  ├─ AnsiStartupGate: defer first render until CPR + size queries complete
+  ├─ AnsiStartupGate: defer first render for CPR and pending capability queries
+  ├─ DA1 reply: release optional kitty and color probe waits
   └─ OutputBufferImpl: cells start clean (IsDirty = false)
 
 Begin(view)  /  first LayoutAndDraw()
@@ -996,7 +997,7 @@ Begin(view)  /  first LayoutAndDraw()
   └─ Reserve vertical space with newlines + CSI {n}A
 ```
 
-The `AnsiStartupGate` ensures no drawing occurs before the terminal responds to the CPR query. If the terminal never responds, the gate times out and rendering proceeds from row 0.
+The `AnsiStartupGate` waits for cursor position and any pending terminal size query before the first draw. Kitty keyboard and default-color probes also join the gate, but a DA1 reply releases their first-draw wait if they have not answered. The probes continue to accept late replies; a late color reply requests a redraw. If cursor position never responds, its 500 ms timeout lets rendering proceed from row 0. If DA1 and the optional probes never respond, their one-second timeouts let rendering proceed.
 
 ### Dynamic Growth
 
