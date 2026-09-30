@@ -7,12 +7,14 @@ public static class ApplicationDispatchExtensions
     /// <param name="app">The application that owns the UI thread.</param>
     /// <param name="action">The action to run.</param>
     /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
-    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <returns>A task that reports completion, cancellation, or the action's exception.</returns>
     /// <remarks>
     ///     The action runs immediately when called on the UI thread during a running session. Otherwise it is queued
     ///     for the next main-loop iteration. Exceptions from the action fault the task and do not enter the main-loop
-    ///     error handler. Pending dispatches are canceled when the application is disposed or its final session ends.
+    ///     error handler, except that an <see cref="OperationCanceledException"/> carrying the canceled caller token
+    ///     cancels the task. Pending dispatches are canceled when the application is disposed or its final session ends.
     ///     Dispatches queued after initialization but before the first session wait for that session to start.
+    ///     After the final session ends or disposal begins, a canceled await may resume on a thread-pool thread.
     ///     To observe action failures, await or otherwise inspect the returned task.
     /// </remarks>
     /// <exception cref="NotInitializedException">The application is not initialized or is shutting down.</exception>
@@ -28,7 +30,7 @@ public static class ApplicationDispatchExtensions
     /// <param name="app">The application that owns the UI thread.</param>
     /// <param name="action">The action to run with the application instance.</param>
     /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
-    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <returns>A task that reports completion, cancellation, or the action's exception.</returns>
     /// <inheritdoc cref="InvokeAsync(IApplication, Action, CancellationToken)" path="/remarks|/exception"/>
     public static Task InvokeAsync (this IApplication app, Action<IApplication> action, CancellationToken cancellationToken = default)
     {
@@ -42,10 +44,11 @@ public static class ApplicationDispatchExtensions
     /// <param name="owner">The session that owns the action's referenced views.</param>
     /// <param name="action">The action to run.</param>
     /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
-    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <returns>A task that reports completion, cancellation, or the action's exception.</returns>
     /// <remarks>
     ///     The owner may be an outer session while an inner modal is running. Ending the owner cancels its pending
     ///     dispatches; ending another session does not. An owner that has already ended yields a canceled task.
+    ///     After the final session ends or disposal begins, a canceled await may resume on a thread-pool thread.
     /// </remarks>
     /// <inheritdoc cref="InvokeAsync(IApplication, Action, CancellationToken)" path="/exception"/>
     public static Task InvokeAsync (this IApplication app, SessionToken owner, Action action, CancellationToken cancellationToken = default)
@@ -61,7 +64,7 @@ public static class ApplicationDispatchExtensions
     /// <param name="owner">The session that owns the action's referenced views.</param>
     /// <param name="action">The action to run with the application instance.</param>
     /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
-    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <returns>A task that reports completion, cancellation, or the action's exception.</returns>
     /// <inheritdoc cref="InvokeAsync(IApplication, SessionToken, Action, CancellationToken)" path="/remarks|/exception"/>
     public static Task InvokeAsync (this IApplication app, SessionToken owner, Action<IApplication> action, CancellationToken cancellationToken = default)
     {

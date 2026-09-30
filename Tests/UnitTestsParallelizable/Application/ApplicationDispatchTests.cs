@@ -90,6 +90,59 @@ public class ApplicationDispatchTests
     }
 
     [Fact]
+    public void UiThreadDispatch_CanInvokeAsyncReentrantly ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+
+        try
+        {
+            List<string> order = [];
+            Task outer = app.InvokeAsync (() =>
+            {
+                order.Add ("outer start");
+                Task inner = app.InvokeAsync (() => order.Add ("inner"), TestContext.Current.CancellationToken);
+                Assert.True (inner.IsCompletedSuccessfully);
+                order.Add ("outer end");
+            }, TestContext.Current.CancellationToken);
+
+            Assert.True (outer.IsCompletedSuccessfully);
+            Assert.Equal (["outer start", "inner", "outer end"], order);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void DisposeInsideDispatch_CompletesStartedActionAndCancelsPendingAction ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        app.Begin (runnable);
+
+        try
+        {
+            bool pendingRan = false;
+            Task pending = QueueOnWorker (() => app.InvokeAsync (() => pendingRan = true));
+            Task running = app.InvokeAsync (() => app.Dispose (), TestContext.Current.CancellationToken);
+
+            Assert.True (running.IsCompletedSuccessfully);
+            Assert.True (pending.IsCanceled);
+            Assert.False (pendingRan);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
     public void CancellationBeforeQueue_DoesNotRunAction ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
@@ -223,6 +276,85 @@ public class ApplicationDispatchTests
             app.End (outerToken);
             inner.Dispose ();
             outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void EndingSession_CancelsOwnedDispatchBeforeStateChangedHandlersPumpTimers ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+
+        try
+        {
+            bool ran = false;
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (owner, () => ran = true));
+            bool modalHandlerSawCancellation = false;
+            bool runningHandlerSawCancellation = false;
+            bool runningHandlerSawRunnable = false;
+
+            runnable.IsModalChanged += (_, _) =>
+            {
+                app.TimedEvents!.RunTimers ();
+                modalHandlerSawCancellation = dispatch.IsCanceled;
+            };
+            runnable.IsRunningChanged += (_, _) =>
+            {
+                app.TimedEvents!.RunTimers ();
+                runningHandlerSawCancellation = dispatch.IsCanceled;
+                runningHandlerSawRunnable = ReferenceEquals (owner.Runnable, runnable);
+            };
+
+            app.End (owner);
+
+            Assert.True (modalHandlerSawCancellation);
+            Assert.True (runningHandlerSawCancellation);
+            Assert.True (runningHandlerSawRunnable);
+            Assert.False (ran);
+            Assert.Null (owner.Runnable);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void SessionBegunHandler_CanQueueOwnedDispatchBeforeRunnableIsRunning ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        Task? dispatch = null;
+        bool wasRunningDuringEvent = true;
+        bool ran = false;
+        EventHandler<SessionTokenEventArgs> handler = (_, args) =>
+        {
+            wasRunningDuringEvent = args.State.Runnable!.IsRunning;
+            dispatch = app.InvokeAsync (args.State, () => ran = true);
+        };
+        app.SessionBegun += handler;
+
+        try
+        {
+            SessionToken owner = app.Begin (runnable)!;
+            Assert.False (wasRunningDuringEvent);
+            Assert.NotNull (dispatch);
+            Assert.False (dispatch.IsCompleted);
+
+            app.TimedEvents!.RunTimers ();
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (ran);
+            app.End (owner);
+        }
+        finally
+        {
+            app.SessionBegun -= handler;
+            runnable.Dispose ();
             app.Dispose ();
         }
     }
@@ -405,6 +537,36 @@ public class ApplicationDispatchTests
             app.TimedEvents!.RunTimers ();
 
             Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (inner.IsRunning);
+        }
+        finally
+        {
+            app.End (innerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void EndingNonTopSession_StateChangedHandlerCannotStartOwnedDispatch ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        SessionToken innerToken = app.Begin (inner)!;
+        Task? dispatch = null;
+        bool ran = false;
+        outer.IsRunningChanged += (_, _) => dispatch = app.InvokeAsync (outerToken, () => ran = true);
+
+        try
+        {
+            app.End (outerToken);
+
+            Assert.NotNull (dispatch);
+            Assert.True (dispatch.IsCanceled);
+            Assert.False (ran);
             Assert.True (inner.IsRunning);
         }
         finally
@@ -722,6 +884,57 @@ public class ApplicationDispatchTests
             app.TimedEvents!.RunTimers ();
 
             Assert.Same (failure, Assert.Throws<InvalidOperationException> (() => dispatch.GetAwaiter ().GetResult ()));
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void CallbackCancellationWithItsCallerToken_CancelsTask ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        using CancellationTokenSource cancellation = new ();
+
+        try
+        {
+            Task dispatch = app.InvokeAsync (() =>
+            {
+                cancellation.Cancel ();
+                throw new OperationCanceledException (cancellation.Token);
+            }, cancellation.Token);
+
+            Assert.True (dispatch.IsCanceled);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void CallbackCancellationWithoutMatchingCanceledToken_FaultsTask ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        using CancellationTokenSource cancellation = new ();
+        using CancellationTokenSource other = new ();
+        other.Cancel ();
+
+        try
+        {
+            Task dispatch = app.InvokeAsync (() => throw new OperationCanceledException (other.Token), cancellation.Token);
+
+            Assert.True (dispatch.IsFaulted);
+            Assert.IsType<OperationCanceledException> (dispatch.Exception!.InnerException);
         }
         finally
         {

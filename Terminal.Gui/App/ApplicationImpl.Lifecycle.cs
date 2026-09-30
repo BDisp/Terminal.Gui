@@ -162,6 +162,8 @@ internal partial class ApplicationImpl
     /// </summary>
     private void DisposeCore ()
     {
+        // Publish shutdown and cancel pending dispatches before stopping the loop. Canceled awaiters
+        // can then resume without posting their continuations to a loop that will no longer pump.
         CancelPendingDispatches (true);
 
         // Stop the coordinator if running

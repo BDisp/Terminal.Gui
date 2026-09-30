@@ -442,9 +442,9 @@ internal partial class ApplicationImpl
     {
         ArgumentNullException.ThrowIfNull (token);
 
-        if (token.Runnable is null)
+        if (token.Runnable is null || token.IsDispatchClosed)
         {
-            return; // Already ended
+            return; // Already ended or ending
         }
 
         Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()}");
@@ -498,6 +498,8 @@ internal partial class ApplicationImpl
 
         // END CRITICAL SECTION - IsRunning/IsModal now thread-safe
 
+        EndSessionDispatches (token);
+
         // Fire events AFTER lock released
         if (wasModal)
         {
@@ -519,7 +521,8 @@ internal partial class ApplicationImpl
 
         Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
 
-        EndSessionDispatches (token);
+        // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
+        token.Runnable = null;
 
         SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
 

@@ -34,7 +34,7 @@ internal partial class ApplicationImpl
 
             if (owner is { })
             {
-                if (owner.Runnable is null || SessionStack?.Contains (owner) != true)
+                if (owner.IsDispatchClosed || owner.Runnable is null || SessionStack?.Contains (owner) != true)
                 {
                     return Task.FromCanceled (new CancellationToken (true));
                 }
@@ -93,7 +93,7 @@ internal partial class ApplicationImpl
         lock (_dispatchLock)
         {
             if (_dispatchStopping
-                || operation.Owner is { Runnable: null }
+                || operation.Owner is { IsDispatchClosed: true } or { Runnable: null }
                 || (operation.Owner is null && HasEndedSession && !HasRunningSession))
             {
                 return false;
@@ -109,9 +109,9 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
-            // Invalidate the owner and select pending work in the same critical section as admission
-            // and dispatch start. Non-top ended tokens can remain in SessionStack.
-            owner.Runnable = null;
+            // Close the owner to dispatch before lifecycle events; keep Runnable available to their handlers.
+            // Non-top ended tokens can remain in SessionStack.
+            owner.IsDispatchClosed = true;
             HasEndedSession = true;
             pending = HasRunningSession
                           ? _pendingDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ()

@@ -14,6 +14,15 @@ public class SessionToken
     /// </summary>
     public IRunnable? Runnable { get; internal set; }
 
+    private bool _isDispatchClosed;
+
+    /// <summary>Whether this session has stopped accepting and running owned dispatches.</summary>
+    internal bool IsDispatchClosed
+    {
+        get => Volatile.Read (ref _isDispatchClosed);
+        set => Volatile.Write (ref _isDispatchClosed, value);
+    }
+
     /// <summary>
     ///     The result of the session. Typically set by the runnable in <see langword="IRunnable.IsRunningChanged"/>
     /// </summary>

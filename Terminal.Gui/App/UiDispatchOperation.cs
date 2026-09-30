@@ -73,6 +73,10 @@ internal sealed class UiDispatchOperation
             _action (_app);
             _completion.TrySetResult ();
         }
+        catch (OperationCanceledException ex) when (_cancellationToken.IsCancellationRequested && ex.CancellationToken == _cancellationToken)
+        {
+            _completion.TrySetCanceled (_cancellationToken);
+        }
         catch (Exception ex)
         {
             _completion.TrySetException (ex);
