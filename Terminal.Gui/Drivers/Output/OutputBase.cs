@@ -14,6 +14,9 @@ public abstract class OutputBase
     {
         IsAttachedToTerminal = Driver.IsAttachedToTerminal (out _, out _);
         CaptureOutput = !IsAttachedToTerminal;
+        // Bind the virtual methods once: old subclasses can flush before a physical color change
+        // or provide their entire sink through StringBuilder. Preserve both contracts without
+        // converting every built-in frame back to text or using reflection on each cell.
         Action<StringBuilder, Attribute, TextStyle> attributeWriter = AppendOrWriteAttribute;
         _usesLegacyAttributeWriter = attributeWriter.Method.DeclaringType != typeof (OutputBase);
         Action<StringBuilder> stringWriter = Write;
@@ -23,11 +26,11 @@ public abstract class OutputBase
     private readonly bool _usesLegacyAttributeWriter;
     private readonly Type? _stringWriterType;
 
-    /// <summary>Gets whether a derived class overrides a built-in StringBuilder sink.</summary>
-    protected bool HasCustomStringWriter (Type builtInType) => _stringWriterType != builtInType;
+    /// <summary>Gets whether a derived StringBuilder sink needs forwarding outside the current compatibility call.</summary>
+    private protected bool HasCustomStringWriter (Type builtInType) => !_forwardingLegacyWrite && _stringWriterType != builtInType;
 
     /// <summary>Gets whether a derived output uses the original StringBuilder attribute hook.</summary>
-    protected bool UsesLegacyAttributeWriter => _usesLegacyAttributeWriter;
+    private protected bool UsesLegacyAttributeWriter => _usesLegacyAttributeWriter;
 
     /// <summary>
     ///     Gets whether this output instance is attached to a real terminal device.
@@ -93,14 +96,33 @@ public abstract class OutputBase
 
     private readonly StringBuilder _lastOutputStringBuilder = new ();
     private bool _clearLastOutputPending;
-    private readonly ConcurrentBag<Utf8Buffer> _utf8Buffers = [];
-    private int _retainedBufferCount;
+    private readonly Utf8Buffer _rowBuffer = new ();
+    private bool _forwardingLegacyWrite;
 
     /// <summary>
     ///     Enables capture for <see cref="GetLastOutput"/>. Headless outputs capture by default
     ///     for tests; terminal-attached outputs must opt in to avoid decoding every write.
+    ///     To configure capture, use the concrete <see cref="OutputBase"/> implementation;
+    ///     <see cref="IOutput"/> does not require this optional diagnostic feature.
+    ///     Disabling capture clears previously captured text and releases its storage.
     /// </summary>
-    public bool CaptureOutput { get; set; }
+    public bool CaptureOutput
+    {
+        get;
+        set
+        {
+            field = value;
+
+            if (value)
+            {
+                return;
+            }
+
+            _lastOutputStringBuilder.Clear ();
+            _lastOutputStringBuilder.Capacity = 0;
+            _clearLastOutputPending = false;
+        }
+    }
 
     // Kitty image ids placed on the previous Write, keyed by RasterImageCommand.Id. A single image
     // can occupy more than one placement when its visible region is fragmented by clipping (e.g. a
@@ -171,8 +193,7 @@ public abstract class OutputBase
         catch
         {
             dirtyState.Restore ();
-            RecoverRasterState (buffer);
-            _recoverOutputState = true;
+            InvalidatePhysicalState (buffer);
             throw;
         }
     }
@@ -184,6 +205,13 @@ public abstract class OutputBase
     private int []? _dirtyChanges;
     private readonly HashSet<int> _kittyImagesTouchedThisFrame = [];
     private readonly HashSet<int> _kittyDeletesToRetry = [];
+
+    // Raw driver writes can also fail midway through an OSC/DCS control string.
+    internal void InvalidatePhysicalState (IOutputBuffer buffer)
+    {
+        RecoverRasterState (buffer);
+        _recoverOutputState = true;
+    }
 
     private void RecoverRasterState (IOutputBuffer buffer)
     {
@@ -216,7 +244,7 @@ public abstract class OutputBase
 
     private void WriteFrame (IOutputBuffer buffer, ref OutputDirtyState dirtyState)
     {
-        using Utf8BufferLease lease = new (this);
+        using Utf8BufferLease lease = new (_rowBuffer);
         Utf8Buffer outputBuffer = lease.Buffer;
         var top = 0;
         var left = 0;
@@ -418,39 +446,15 @@ public abstract class OutputBase
         }
     }
 
-    private readonly struct Utf8BufferLease : IDisposable
+    // Writes are serialized by the main loop; a finally scope also releases oversized row buffers.
+    private readonly struct Utf8BufferLease (Utf8Buffer buffer) : IDisposable
     {
-        private readonly OutputBase _owner;
-
-        public Utf8BufferLease (OutputBase owner)
-        {
-            _owner = owner;
-
-            if (owner._utf8Buffers.TryTake (out Utf8Buffer? reusable))
-            {
-                Interlocked.Decrement (ref owner._retainedBufferCount);
-                Buffer = reusable;
-            }
-            else
-            {
-                Buffer = new ();
-            }
-        }
-
-        public Utf8Buffer Buffer { get; }
+        public Utf8Buffer Buffer { get; } = buffer;
 
         public void Dispose ()
         {
             Buffer.Clear ();
             Buffer.TrimExcess ();
-
-            if (Interlocked.Increment (ref _owner._retainedBufferCount) == 1)
-            {
-                _owner._utf8Buffers.Add (Buffer);
-                return;
-            }
-
-            Interlocked.Decrement (ref _owner._retainedBufferCount);
         }
     }
 
@@ -605,19 +609,51 @@ public abstract class OutputBase
     /// <param name="output">UTF-8 encoded bytes to write.</param>
     protected virtual void Write (ReadOnlySpan<byte> output)
     {
-        // A subclass built before #5650 may only override Write(StringBuilder).
-        // Route bytes through that virtual sink so rendered cells cannot disappear.
-        Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+        // A legacy StringBuilder override may forward encoded bytes back to this overload.
+        // Its re-entry reaches the original base capture sink, rather than the same override.
+        if (_stringWriterType == typeof (OutputBase) || _forwardingLegacyWrite)
+        {
+            CaptureUtf8 (output);
+            return;
+        }
+
+        WriteLegacyString (new StringBuilder (Encoding.UTF8.GetString (output)));
     }
 
     /// <summary>
     ///     Sends an already constructed raster or control sequence. The default preserves
     ///     the pre-#5650 StringBuilder sink for downstream output implementations.
     /// </summary>
-    protected virtual void WriteEncodedString (string output) => Write (new StringBuilder (output));
+    private protected virtual void WriteEncodedString (string output)
+    {
+        if (_stringWriterType == typeof (OutputBase) || _forwardingLegacyWrite)
+        {
+            CaptureText (output.AsSpan ());
+            return;
+        }
+
+        WriteLegacyString (new StringBuilder (output));
+    }
+
+    // Covers both byte fallback and raster strings. Concrete built-in sinks also use this scope
+    // so a StringBuilder override can forward bytes to their native implementation once.
+    private protected void WriteLegacyString (StringBuilder output)
+    {
+        bool wasForwarding = _forwardingLegacyWrite;
+        _forwardingLegacyWrite = true;
+
+        try
+        {
+            Write (output);
+        }
+        finally
+        {
+            _forwardingLegacyWrite = wasForwarding;
+        }
+    }
 
     /// <summary>Captures a UTF-8 write when output capture is enabled.</summary>
-    protected void CaptureUtf8 (ReadOnlySpan<byte> output)
+    private protected void CaptureUtf8 (ReadOnlySpan<byte> output)
     {
         if (!CaptureOutput)
         {
@@ -628,7 +664,7 @@ public abstract class OutputBase
     }
 
     /// <summary>Captures decoded output when output capture is enabled.</summary>
-    protected void CaptureText (ReadOnlySpan<char> output)
+    private protected void CaptureText (ReadOnlySpan<char> output)
     {
         if (!CaptureOutput)
         {

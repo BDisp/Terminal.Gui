@@ -18,19 +18,43 @@ internal partial class WindowsOutput : OutputBase, IOutput
     {
         if (!succeeded)
         {
+            if (error == 0)
+            {
+                throw new IOException ("WriteConsoleW failed without an error code.");
+            }
+
             throw new Win32Exception (error);
         }
 
-        if (written != expected)
+        if (written == 0 || written > expected)
         {
             throw new IOException ($"WriteConsoleW wrote {written} of {expected} characters.");
         }
     }
 
-    private static void WriteConsoleChecked (nint handle, ReadOnlySpan<char> text)
+    internal delegate bool ConsoleWriter (nint handle, ReadOnlySpan<char> text, out uint written, out int error);
+
+    internal static void WriteConsoleChecked (nint handle, ReadOnlySpan<char> text, ConsoleWriter? writer = null)
     {
-        bool succeeded = WriteConsole (handle, text, (uint)text.Length, out uint written, nint.Zero);
-        ValidateConsoleWriteResult (succeeded, written, (uint)text.Length, Marshal.GetLastWin32Error ());
+        while (!text.IsEmpty)
+        {
+            bool succeeded;
+            uint written;
+            int error;
+
+            if (writer is { })
+            {
+                succeeded = writer (handle, text, out written, out error);
+            }
+            else
+            {
+                succeeded = WriteConsole (handle, text, (uint)text.Length, out written, nint.Zero);
+                error = Marshal.GetLastWin32Error ();
+            }
+
+            ValidateConsoleWriteResult (succeeded, written, (uint)text.Length, error);
+            text = text [(int)written..];
+        }
     }
 
     [LibraryImport ("kernel32.dll", SetLastError = true)]
@@ -223,15 +247,12 @@ internal partial class WindowsOutput : OutputBase, IOutput
                     Write (EscSeqUtils.CSI_ShowCursor);
                 }
             }
+            SetCursorPositionImpl (cursor.Position?.X ?? 0, cursor.Position?.Y ?? 0);
+            _currentCursor = cursor;
         }
         catch
         {
-            // Ignore any exceptions
-        }
-        finally
-        {
-            SetCursorPositionImpl (cursor.Position?.X ?? 0, cursor.Position?.Y ?? 0);
-            _currentCursor = cursor;
+            // Cursor updates are best effort, including the final position write.
         }
     }
 
@@ -410,7 +431,7 @@ internal partial class WindowsOutput : OutputBase, IOutput
     }
 
     /// <inheritdoc/>
-    protected override void WriteEncodedString (string output)
+    private protected override void WriteEncodedString (string output)
     {
         CaptureText (output.AsSpan ());
 
@@ -576,35 +597,46 @@ internal partial class WindowsOutput : OutputBase, IOutput
             return;
         }
 
-        if (IsLegacyConsole)
+        try
         {
-            if (_screenBuffer != nint.Zero)
+            if (IsLegacyConsole)
             {
-                CloseHandle (_screenBuffer);
+                if (_screenBuffer != nint.Zero)
+                {
+                    CloseHandle (_screenBuffer);
+                }
+
+                _screenBuffer = nint.Zero;
+                return;
             }
 
-            _screenBuffer = nint.Zero;
-        }
-        else
-        {
             if (Environment.GetEnvironmentVariable ("VSAPPIDNAME") is null)
             {
-                //Disable alternative screen buffer.
-                Console.Out.Write (EscSeqUtils.CSI_RestoreCursorAndRestoreAltBufferWithBackscroll);
+                Restore (() => Write (EscSeqUtils.CSI_RestoreCursorAndRestoreAltBufferWithBackscroll));
+                Restore (() => Write (EscSeqUtils.CSI_ShowCursor));
+                return;
+            }
 
-                //Set cursor key to cursor.
-                Write (EscSeqUtils.CSI_ShowCursor);
-            }
-            else
-            {
-                // Simulate restoring the color and clearing the screen.
-                Console.ForegroundColor = _foreground;
-                Console.BackgroundColor = _background;
-                Console.Clear ();
-            }
+            Restore (() => Console.ForegroundColor = _foreground);
+            Restore (() => Console.BackgroundColor = _background);
+            Restore (Console.Clear);
+        }
+        finally
+        {
+            _isDisposed = true;
         }
 
-        _isDisposed = true;
+        static void Restore (Action restore)
+        {
+            try
+            {
+                restore ();
+            }
+            catch (Exception ex)
+            {
+                Logging.Error ($"Error restoring Windows console: {ex.Message}");
+            }
+        }
     }
 
     /// <inheritdoc/>

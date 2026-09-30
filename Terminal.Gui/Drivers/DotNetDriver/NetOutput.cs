@@ -112,11 +112,11 @@ public class NetOutput : OutputBase, IOutput
     }
 
     /// <inheritdoc/>
-    protected override void WriteEncodedString (string output)
+    private protected override void WriteEncodedString (string output)
     {
         if (HasCustomStringWriter (typeof (NetOutput)))
         {
-            Write (new StringBuilder (output));
+            WriteLegacyString (new StringBuilder (output));
             return;
         }
 
@@ -142,7 +142,7 @@ public class NetOutput : OutputBase, IOutput
     {
         if (HasCustomStringWriter (typeof (NetOutput)))
         {
-            Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+            base.Write (output);
             return;
         }
 

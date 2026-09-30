@@ -365,14 +365,35 @@ internal static class UnixIOHelper
 
     internal delegate nint WriteBytes (int fd, ReadOnlySpan<byte> buffer);
 
-    internal static bool TryWriteAll (int fd, ReadOnlySpan<byte> buffer, WriteBytes writeFunc)
+    internal static bool TryWriteAll (int fd, ReadOnlySpan<byte> buffer, WriteBytes writeFunc, Func<int>? getError = null)
     {
         int offset = 0;
+        int transientFailures = 0;
+        int wouldBlock = OperatingSystem.IsMacOS () || OperatingSystem.IsFreeBSD () ? 35 : 11;
 
         while (offset < buffer.Length)
         {
             ReadOnlySpan<byte> remaining = buffer [offset..];
             nint written = writeFunc (fd, remaining);
+
+            if (written == -1)
+            {
+                int error = getError?.Invoke () ?? Marshal.GetLastPInvokeError ();
+
+                // Bound the entire call, including intermittent progress, so a slow or broken
+                // nonblocking terminal cannot monopolize the UI thread. The next frame retries.
+                if ((error == 4 || error == wouldBlock) && transientFailures++ < 8)
+                {
+                    if (error == wouldBlock)
+                    {
+                        Thread.Sleep (1);
+                    }
+
+                    continue;
+                }
+
+                return false;
+            }
 
             if (written <= 0 || written > remaining.Length)
             {

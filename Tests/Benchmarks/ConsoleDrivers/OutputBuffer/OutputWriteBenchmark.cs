@@ -18,7 +18,6 @@ namespace Terminal.Gui.Benchmarks.ConsoleDrivers.OutputBuffer;
 ///     </para>
 /// </remarks>
 [MemoryDiagnoser]
-[InvocationCount (1)]
 [BenchmarkCategory ("Output", "Latency")]
 public class OutputWriteBenchmark
 {
@@ -54,7 +53,6 @@ public class OutputWriteBenchmark
     /// <summary>
     ///     Marks every cell dirty before measuring a full-frame flush.
     /// </summary>
-    [IterationSetup (Target = nameof (FullFrame))]
     public void PrepareFullFrame ()
     {
         MarkFullFrame (_fullBuffer);
@@ -64,7 +62,6 @@ public class OutputWriteBenchmark
     /// <summary>
     ///     Marks only the first and last cells of every row dirty before measuring a sparse flush.
     /// </summary>
-    [IterationSetup (Target = nameof (SparseBorderFrame))]
     public void PrepareSparseBorderFrame ()
     {
         MarkSparseBorderFrame (_sparseBuffer);
@@ -77,6 +74,7 @@ public class OutputWriteBenchmark
     [Benchmark (Baseline = true)]
     public long FullFrame ()
     {
+        PrepareFullFrame ();
         _output.Write (_fullBuffer);
 
         if (_output.Writes == 0 || _output.PayloadBytesWritten == 0)
@@ -93,6 +91,7 @@ public class OutputWriteBenchmark
     [Benchmark]
     public long SparseBorderFrame ()
     {
+        PrepareSparseBorderFrame ();
         _output.Write (_sparseBuffer);
 
         if (_output.Writes == 0 || _output.PayloadBytesWritten == 0)

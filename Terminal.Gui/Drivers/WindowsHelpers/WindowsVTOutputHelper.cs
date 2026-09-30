@@ -201,6 +201,11 @@ internal sealed partial class WindowsVTOutputHelper : IDisposable
 
             if (!succeeded)
             {
+                if (error == 0)
+                {
+                    throw new IOException ("WriteFile failed without an error code.");
+                }
+
                 throw new Win32Exception (error);
             }
 

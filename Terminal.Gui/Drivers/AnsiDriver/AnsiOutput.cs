@@ -78,13 +78,6 @@ public class AnsiOutput : OutputBase, IOutput
 
         try
         {
-            // Ensure the console output code page is UTF-8 (65001). The ANSI driver writes
-            // UTF-8 encoded bytes via WriteFile; without this, a fresh Windows terminal uses
-            // its default OEM code page (e.g. 437), causing multi-byte UTF-8 characters
-            // (box-drawing glyphs, etc.) to be misinterpreted as garbled single-byte characters.
-            // See https://github.com/tui-cs/Terminal.Gui/issues/4848
-            Console.OutputEncoding = Encoding.UTF8;
-
             // Check if we have a real console first
             if (!IsAttachedToTerminal)
             {
@@ -99,6 +92,13 @@ public class AnsiOutput : OutputBase, IOutput
             // Initialize platform-specific output helpers
             if (OperatingSystem.IsWindows ())
             {
+                // Ensure the console output code page is UTF-8 (65001). The ANSI driver writes
+                // UTF-8 encoded bytes via WriteFile; without this, a fresh Windows terminal uses
+                // its default OEM code page (e.g. 437), causing multi-byte UTF-8 characters
+                // (box-drawing glyphs, etc.) to be misinterpreted as garbled single-byte characters.
+                // See https://github.com/tui-cs/Terminal.Gui/issues/4848
+                Console.OutputEncoding = Encoding.UTF8;
+
                 _windowsVTOutput = new WindowsVTOutputHelper ();
 
                 if (!_windowsVTOutput.TryEnable ())
@@ -116,25 +116,11 @@ public class AnsiOutput : OutputBase, IOutput
             }
             else
             {
-                // duplicate the controlling terminal output fd so we don't mess with it.
-                // When stdout is redirected this is /dev/tty rather than STDOUT_FILENO,
-                // allowing TUI rendering to appear on the real terminal even when the
-                // app's stdout participates in a shell pipeline.
-                int outputFd = TerminalDevice.OutputFd;
-
-                if (outputFd < 0)
+                // TerminalDevice owns the controlling terminal descriptor. This output neither
+                // duplicates nor closes it; redirected stdout still renders through /dev/tty.
+                if (TerminalDevice.OutputFd < 0)
                 {
                     Trace.Lifecycle (nameof (AnsiOutput), "Init", "Console output stream is not writable. Running in degraded mode.");
-
-                    return;
-                }
-
-                int fdCopy = UnixIOHelper.dup (outputFd);
-
-                if (fdCopy == -1)
-                {
-                    Trace.Lifecycle (nameof (AnsiOutput), "Init", "Console output stream is not writable. Running in degraded mode.");
-
                     return;
                 }
 
@@ -171,15 +157,23 @@ public class AnsiOutput : OutputBase, IOutput
         catch (Exception ex)
         {
             Trace.Lifecycle (nameof (AnsiOutput), "Init", $"Failed to initialize ANSIOutput: {ex.GetType ().Name}: {ex.Message}. Stack trace: {ex.StackTrace}");
+            // Initialization may already have switched buffers or enabled input modes.
+            // Attempt all restores while the native sink is still available.
+            Dispose ();
             _platform = AnsiPlatform.Degraded;
         }
     }
 
     // Exercises UnixRaw framing without opening a terminal or changing process-wide stdout.
-    internal AnsiOutput (UnixWriter unixWriter) : this ()
+    internal AnsiOutput (UnixWriter unixWriter, AppModel appModel = AppModel.FullScreen)
     {
+        AppModel = appModel;
         _platform = AnsiPlatform.UnixRaw;
         _unixWriter = unixWriter;
+        _lastBuffer = new OutputBufferImpl ();
+        _currentCursor = new Cursor ();
+        _consoleSize = new Size (80, 25);
+        _lastBuffer.SetSize (_consoleSize.Width, _consoleSize.Height);
     }
 
     /// <inheritdoc/>
@@ -232,11 +226,11 @@ public class AnsiOutput : OutputBase, IOutput
     }
 
     /// <inheritdoc/>
-    protected override void WriteEncodedString (string output)
+    private protected override void WriteEncodedString (string output)
     {
         if (HasCustomStringWriter (typeof (AnsiOutput)))
         {
-            Write (new StringBuilder (output));
+            WriteLegacyString (new StringBuilder (output));
             return;
         }
 
@@ -252,9 +246,22 @@ public class AnsiOutput : OutputBase, IOutput
             return;
         }
 
-        byte [] encoded = new byte [Encoding.UTF8.GetByteCount (text)];
-        Encoding.UTF8.GetBytes (text, encoded);
-        Write (encoded);
+        // Encode bounded chunks into reusable storage. Never divide a surrogate pair:
+        // CaptureUtf8 and downstream sinks may decode each physical chunk independently.
+        while (!text.IsEmpty)
+        {
+            int count = Math.Min (text.Length, 16 * 1024);
+
+            if (count < text.Length && char.IsHighSurrogate (text [count - 1]) && char.IsLowSurrogate (text [count]))
+            {
+                count--;
+            }
+
+            _encodedText.Clear ();
+            _encodedText.Append (text [..count]);
+            Write (_encodedText.AsSpan ());
+            text = text [count..];
+        }
     }
 
     /// <inheritdoc cref="IOutput.Write(IOutputBuffer)"/>
@@ -304,7 +311,7 @@ public class AnsiOutput : OutputBase, IOutput
     {
         if (HasCustomStringWriter (typeof (AnsiOutput)))
         {
-            Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+            base.Write (output);
             return;
         }
 
@@ -387,9 +394,10 @@ public class AnsiOutput : OutputBase, IOutput
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();
     private readonly Utf8Buffer _frameBuffer = new ();
+    private readonly Utf8Buffer _encodedText = new ();
     private bool _batchMode;
 
-    internal int RetainedWriteBufferBytes => _pendingCursorMoves.Capacity + _frameBuffer.Capacity;
+    internal int RetainedWriteBufferBytes => _pendingCursorMoves.Capacity + _frameBuffer.Capacity + _encodedText.Capacity;
 
     /// <inheritdoc/>
     public Cursor GetCursor () => _currentCursor;
@@ -412,16 +420,12 @@ public class AnsiOutput : OutputBase, IOutput
 
                 Write (EscSeqUtils.CSI_ShowCursor);
             }
-        }
-        catch
-        {
-            // Ignore any exceptions
-        }
-        finally
-        {
             SetCursorPositionImpl (cursor.Position?.X ?? 0, cursor.Position?.Y ?? 0);
-
             _currentCursor = cursor;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            Logging.Error ($"Error updating ANSI cursor: {ex.Message}");
         }
     }
 
@@ -493,44 +497,33 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc/>
     public void Dispose ()
     {
+        if (_platform == AnsiPlatform.Degraded)
+        {
+            return;
+        }
+
         try
         {
-            if (_platform == AnsiPlatform.Degraded)
-            {
-                return;
-            }
-
-            // Restore terminal state: disable mouse, reset attributes, show cursor
-            Write (EscSeqUtils.CSI_DisableBracketedPaste);
-            Write (EscSeqUtils.CSI_DisableMouseEvents);
-            Write (EscSeqUtils.CSI_ResetAttributes);
+            Restore (EscSeqUtils.CSI_DisableBracketedPaste);
+            Restore (EscSeqUtils.CSI_DisableMouseEvents);
+            Restore (EscSeqUtils.CSI_ResetAttributes);
 
             if (AppModel == AppModel.Inline)
             {
-                // Inline mode: do NOT restore alternate buffer. Move cursor to just
-                // below the inline region so the shell prompt appears naturally.
-                // Position to the last row of the inline region (guaranteed to exist),
-                // then write \n to scroll the terminal if at the bottom edge.
                 Rectangle appScreen = AppScreenGetter?.Invoke () ?? default;
-                int lastInlineRow = appScreen.Y + appScreen.Height; // 1-indexed last row
-                Write (EscSeqUtils.CSI_SetCursorPosition (lastInlineRow, 1));
-                Write ("\n");
+                Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
+                Restore ("\n");
             }
             else
             {
-                // FullScreen mode: restore alternate buffer and show cursor
-                Write (EscSeqUtils.CSI_RestoreCursorAndRestoreAltBufferWithBackscroll);
+                Restore (EscSeqUtils.CSI_RestoreCursorAndRestoreAltBufferWithBackscroll);
             }
 
-            Write (EscSeqUtils.CSI_ShowCursor);
-        }
-        catch
-        {
-            // Ignore errors - we're shutting down
+            Restore (EscSeqUtils.CSI_ShowCursor);
         }
         finally
         {
-            Trace.Lifecycle (nameof (AnsiOutput), "Dispose", "Flushing output and releasing resources.");
+            Trace.Lifecycle (nameof (AnsiOutput), "Dispose", "Releasing output resources.");
 
             if (_platform == AnsiPlatform.WindowsVT)
             {
@@ -538,6 +531,18 @@ public class AnsiOutput : OutputBase, IOutput
             }
 
             _windowsVTOutput?.Dispose ();
+        }
+
+        void Restore (string sequence)
+        {
+            try
+            {
+                Write (sequence.AsSpan ());
+            }
+            catch (Exception ex)
+            {
+                Logging.Error ($"Error restoring ANSI terminal: {ex.Message}");
+            }
         }
     }
 }
