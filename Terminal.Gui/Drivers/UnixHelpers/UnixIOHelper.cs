@@ -100,6 +100,9 @@ internal static class UnixIOHelper
     [DllImport ("libc", SetLastError = true)]
     public static extern int write (int fd, byte [] buf, int count);
 
+    [DllImport ("libc", EntryPoint = "write", SetLastError = true)]
+    private static extern nint WriteSpanNative (int fd, ref byte buffer, nuint count);
+
     /// <summary>
     ///     Flush (discard) data in the terminal input or output queue.
     /// </summary>
@@ -305,7 +308,7 @@ internal static class UnixIOHelper
                 return false;
             }
 
-            return TryWriteAll (fd, buffer, buffer.Length, write);
+            return TryWriteAll (fd, buffer, WriteSpan);
         }
         catch
         {
@@ -337,7 +340,7 @@ internal static class UnixIOHelper
                 return false;
             }
 
-            return TryWriteAll (fd, buffer, count, write);
+            return TryWriteAll (fd, buffer.AsSpan (0, count), WriteSpan);
         }
         catch
         {
@@ -345,28 +348,45 @@ internal static class UnixIOHelper
         }
     }
 
-    internal static bool TryWriteAll (int fd, byte [] buffer, int count, Func<int, byte [], int, int> writeFunc)
+    /// <summary>Writes a span without copying a reusable caller buffer.</summary>
+    public static bool TryWriteStdout (ReadOnlySpan<byte> buffer)
+    {
+        try
+        {
+            int fd = TerminalDevice.OutputFd;
+
+            return fd >= 0 && TryWriteAll (fd, buffer, WriteSpan);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal delegate nint WriteBytes (int fd, ReadOnlySpan<byte> buffer);
+
+    internal static bool TryWriteAll (int fd, ReadOnlySpan<byte> buffer, WriteBytes writeFunc)
     {
         int offset = 0;
-        int remaining = count;
 
-        while (remaining > 0)
+        while (offset < buffer.Length)
         {
-            // P/Invoke always writes from index 0, so slice when offset > 0.
-            byte [] slice = offset == 0 ? buffer : buffer [offset..];
-            int written = writeFunc (fd, slice, remaining);
+            ReadOnlySpan<byte> remaining = buffer [offset..];
+            nint written = writeFunc (fd, remaining);
 
-            if (written <= 0)
+            if (written <= 0 || written > remaining.Length)
             {
                 return false;
             }
 
-            offset += written;
-            remaining -= written;
+            offset += (int)written;
         }
 
         return true;
     }
+
+    internal static nint WriteSpan (int fd, ReadOnlySpan<byte> buffer) =>
+        WriteSpanNative (fd, ref MemoryMarshal.GetReference (buffer), (nuint)buffer.Length);
 
     /// <summary>
     ///     Writes a UTF-8 string to stdout.

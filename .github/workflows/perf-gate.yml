@@ -97,7 +97,7 @@ jobs:
             --configuration Release \
             --no-build \
             -- \
-            --filter '*Scroll*' '*Config*' '*Scheme*' '*Theme*' \
+            --filter '*Scroll*' '*Config*' '*Scheme*' '*Theme*' '*OutputWriteBenchmark*' '*UnixRawOutputBenchmark*' \
             --job short \
             --exporters json \
             --artifacts ./BenchmarkResults
@@ -210,3 +210,49 @@ jobs:
           path: BenchmarkResults/
           if-no-files-found: ignore
           retention-days: 30
+
+  output-benchmark-pr:
+    name: Output Benchmarks (Linux, ShortRun)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 20
+    env:
+      DisableRealDriverIO: "1"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.x
+          dotnet-quality: 'ga'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Run output benchmarks
+        run: |
+          dotnet run \
+            --project Tests/Benchmarks \
+            --configuration Release \
+            -p:GeneratePackageOnBuild=false \
+            --no-restore \
+            -- \
+            --filter '*OutputWriteBenchmark*' '*UnixRawOutputBenchmark*' \
+            --job short \
+            --inProcess \
+            --exporters json \
+            --artifacts ./BenchmarkResults
+
+      - name: Upload output benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: output-benchmark-results-${{ github.sha }}
+          path: BenchmarkResults/
+          if-no-files-found: ignore
+          retention-days: 14

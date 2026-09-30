@@ -36,8 +36,11 @@ namespace Terminal.Gui.Drivers;
 /// </summary>
 public class AnsiOutput : OutputBase, IOutput
 {
+    internal delegate bool UnixWriter (ReadOnlySpan<byte> output);
+
     // Tracks which underlying platform APIs are in use
     private readonly AnsiPlatform _platform;
+    private readonly UnixWriter? _unixWriter;
 
     private Size _consoleSize;
     private IOutputBuffer? _lastBuffer;
@@ -172,6 +175,13 @@ public class AnsiOutput : OutputBase, IOutput
         }
     }
 
+    // Exercises UnixRaw framing without opening a terminal or changing process-wide stdout.
+    internal AnsiOutput (UnixWriter unixWriter) : this ()
+    {
+        _platform = AnsiPlatform.UnixRaw;
+        _unixWriter = unixWriter;
+    }
+
     /// <inheritdoc/>
     public void Suspend () => UnixTerminalHelper.Suspend (this);
 
@@ -212,74 +222,30 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override void Write (StringBuilder output)
     {
-        // In batch mode, route through the byte-span path to merge with deferred cursor moves.
-        if (_batchMode && _pendingCursorMoves.Length > 0)
+        if (_platform == AnsiPlatform.Degraded && !_batchMode)
         {
-            byte [] utf8 = Encoding.UTF8.GetBytes (output.ToString ());
-            Write (utf8);
-
+            base.Write (output);
             return;
         }
 
-        base.Write (output);
-
-        try
-        {
-            switch (_platform)
-            {
-                case AnsiPlatform.WindowsVT:
-                    _windowsVTOutput!.Write (output);
-
-                    break;
-
-                case AnsiPlatform.UnixRaw:
-                    byte [] utf8 = Encoding.UTF8.GetBytes (output.ToString ());
-                    UnixIOHelper.TryWriteStdout (utf8);
-
-                    return;
-
-                case AnsiPlatform.Degraded:
-                default:
-                    break;
-            }
-        }
-        catch (Exception)
-        {
-            // ignore for unit tests
-        }
+        Write (Encoding.UTF8.GetBytes (output.ToString ()));
     }
+
+    /// <inheritdoc/>
+    protected override void WriteEncodedString (string output) => Write (output.AsSpan ());
 
     /// <inheritdoc/>
     public void Write (ReadOnlySpan<char> text)
     {
-        StringBuilder capturedOutput = new ();
-        capturedOutput.Append (text);
-        base.Write (capturedOutput);
-
-        try
+        if (_platform == AnsiPlatform.Degraded && !_batchMode)
         {
-            switch (_platform)
-            {
-                case AnsiPlatform.WindowsVT:
-                    _windowsVTOutput!.Write (capturedOutput);
-
-                    break;
-
-                case AnsiPlatform.UnixRaw:
-                    byte [] utf8 = Encoding.UTF8.GetBytes (text.ToArray ());
-                    UnixIOHelper.TryWriteStdout (utf8);
-
-                    return;
-
-                case AnsiPlatform.Degraded:
-                default:
-                    break;
-            }
+            CaptureText (text);
+            return;
         }
-        catch (Exception)
-        {
-            // ignore for unit tests
-        }
+
+        byte [] encoded = new byte [Encoding.UTF8.GetByteCount (text)];
+        Encoding.UTF8.GetBytes (text, encoded);
+        Write (encoded);
     }
 
     /// <inheritdoc cref="IOutput.Write(IOutputBuffer)"/>
@@ -287,21 +253,32 @@ public class AnsiOutput : OutputBase, IOutput
     {
         _lastBuffer = buffer;
         _batchMode = true;
+        _frameBuffer.Clear ();
 
         try
         {
             base.Write (buffer);
+
+            if (_pendingCursorMoves.Length > 0)
+            {
+                _frameBuffer.Append (_pendingCursorMoves);
+                _pendingCursorMoves.Clear ();
+            }
+
+            _batchMode = false;
+
+            if (_frameBuffer.Length > 0)
+            {
+                Write (_frameBuffer.AsSpan ());
+            }
         }
         finally
         {
             _batchMode = false;
-
-            // Flush any remaining deferred cursor moves
-            if (_pendingCursorMoves.Length > 0)
-            {
-                Write (_pendingCursorMoves.AsSpan ());
-                _pendingCursorMoves.Clear ();
-            }
+            _pendingCursorMoves.Clear ();
+            _pendingCursorMoves.TrimExcess ();
+            _frameBuffer.Clear ();
+            _frameBuffer.TrimExcess ();
         }
     }
 
@@ -314,82 +291,69 @@ public class AnsiOutput : OutputBase, IOutput
     {
         try
         {
-            switch (_platform)
+            if (_batchMode)
             {
-                case AnsiPlatform.WindowsVT:
-                    if (_batchMode && _pendingCursorMoves.Length > 0)
+                if (_pendingCursorMoves.Length > 0)
+                {
+                    _frameBuffer.Append (_pendingCursorMoves);
+                    _pendingCursorMoves.Clear ();
+                }
+
+                // Send large images directly after earlier frame content. Staging
+                // them would make the frame buffer retain multi-megabyte capacity.
+                if (output.Length > Utf8Buffer.RetainedCapacityLimit)
+                {
+                    if (_frameBuffer.Length > 0)
                     {
-                        _pendingCursorMoves.AppendBytes (output);
-                        base.Write (_pendingCursorMoves.AsSpan ());
-                        _windowsVTOutput!.Write (_pendingCursorMoves.AsSpan ());
-                        _pendingCursorMoves.Clear ();
-                    }
-                    else
-                    {
-                        base.Write (output);
-                        _windowsVTOutput!.Write (output);
+                        WriteDirect (_frameBuffer.AsSpan ());
+                        _frameBuffer.Clear ();
                     }
 
-                    break;
-
-                case AnsiPlatform.UnixRaw:
-                    if (_batchMode && _pendingCursorMoves.Length > 0)
-                    {
-                        _pendingCursorMoves.AppendBytes (output);
-                        base.Write (_pendingCursorMoves.AsSpan ());
-                        WriteUnix (_pendingCursorMoves.AsSpan ());
-                        _pendingCursorMoves.Clear ();
-                    }
-                    else
-                    {
-                        base.Write (output);
-                        WriteUnix (output);
-                    }
-
+                    WriteDirect (output);
                     return;
+                }
 
-                case AnsiPlatform.Degraded:
-                default:
-                    base.Write (output);
-                    break;
+                _frameBuffer.AppendBytes (output);
+                return;
             }
+
+            WriteDirect (output);
         }
-        catch (Exception)
+        catch (IOException ex)
         {
-            // ignore for unit tests
+            Logging.Error ($"Error writing ANSI output: {ex.Message}");
+            _pendingCursorMoves.Clear ();
+            throw;
         }
+    }
+
+    private void WriteDirect (ReadOnlySpan<byte> output)
+    {
+        switch (_platform)
+        {
+            case AnsiPlatform.WindowsVT:
+                _windowsVTOutput!.Write (output);
+                break;
+
+            case AnsiPlatform.UnixRaw:
+                if (!(_unixWriter?.Invoke (output) ?? UnixIOHelper.TryWriteStdout (output)))
+                {
+                    throw new IOException ("Failed to write ANSI output to the terminal.");
+                }
+                break;
+        }
+
+        CaptureUtf8 (output);
     }
 
     private Cursor _currentCursor;
 
-    /// <summary>
-    ///     Copies <paramref name="output"/> into a reusable backing array and writes to stdout,
-    ///     avoiding <see cref="ReadOnlySpan{T}.ToArray"/> allocation on every call.
-    /// </summary>
-    private void WriteUnix (ReadOnlySpan<byte> output)
-    {
-        int len = output.Length;
-
-        if (len == 0)
-        {
-            return;
-        }
-
-        if (_unixWriteBuffer is null || _unixWriteBuffer.Length < len)
-        {
-            _unixWriteBuffer = new byte [len];
-        }
-
-        output.CopyTo (_unixWriteBuffer);
-        UnixIOHelper.TryWriteStdout (_unixWriteBuffer, len);
-    }
-
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();
+    private readonly Utf8Buffer _frameBuffer = new ();
     private bool _batchMode;
 
-    // PERF: Reusable backing array for Unix writes — avoids ToArray() allocation on every Write call.
-    private byte []? _unixWriteBuffer;
+    internal int RetainedWriteBufferBytes => _pendingCursorMoves.Capacity + _frameBuffer.Capacity;
 
     /// <inheritdoc/>
     public Cursor GetCursor () => _currentCursor;
@@ -448,6 +412,7 @@ public class AnsiOutput : OutputBase, IOutput
         {
             // PERF: Defer cursor-move to _pendingCursorMoves (Utf8Buffer); merges with subsequent cell content
             // into a single WriteFile P/Invoke instead of one per cursor move.
+            _pendingCursorMoves.Clear ();
             _pendingCursorMoves.AppendAscii (EscSeqUtils.CSI_SetCursorPosition (row + 1 + inlineRowOffset, col + 1));
         }
         else

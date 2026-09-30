@@ -9,6 +9,7 @@ namespace Terminal.Gui.Drivers;
 public class NetOutput : OutputBase, IOutput
 {
     private readonly bool _isWinPlatform;
+    private char []? _utf16DecodeBuffer;
 
     /// <summary>
     ///     Creates a new instance of the <see cref="NetOutput"/> class.
@@ -111,9 +112,9 @@ public class NetOutput : OutputBase, IOutput
     }
 
     /// <inheritdoc/>
-    protected override void Write (ReadOnlySpan<byte> output)
+    protected override void WriteEncodedString (string output)
     {
-        base.Write (output);
+        CaptureText (output.AsSpan ());
 
         if (!IsAttachedToTerminal)
         {
@@ -122,7 +123,51 @@ public class NetOutput : OutputBase, IOutput
 
         try
         {
-            Console.Out.Write (Encoding.UTF8.GetString (output));
+            Console.Out.Write (output.AsSpan ());
+        }
+        catch (IOException)
+        {
+            // Not connected to a terminal; do nothing.
+        }
+    }
+
+    /// <inheritdoc/>
+    protected override void Write (ReadOnlySpan<byte> output)
+    {
+        if (output.IsEmpty)
+        {
+            return;
+        }
+
+        int maxCharCount = Encoding.UTF8.GetMaxCharCount (output.Length);
+        char [] decoded;
+
+        if (maxCharCount > Utf8Buffer.RetainedCapacityLimit)
+        {
+            decoded = new char [maxCharCount];
+        }
+        else
+        {
+            if (_utf16DecodeBuffer is null || _utf16DecodeBuffer.Length < maxCharCount)
+            {
+                _utf16DecodeBuffer = new char [maxCharCount];
+            }
+
+            decoded = _utf16DecodeBuffer;
+        }
+
+        int charCount = Encoding.UTF8.GetChars (output, decoded);
+        ReadOnlySpan<char> text = decoded.AsSpan (0, charCount);
+        CaptureText (text);
+
+        if (!IsAttachedToTerminal)
+        {
+            return;
+        }
+
+        try
+        {
+            Console.Out.Write (text);
         }
         catch (IOException)
         {

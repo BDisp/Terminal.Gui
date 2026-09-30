@@ -10,7 +10,15 @@ public abstract class OutputBase
     /// <summary>
     ///     Initializes a new instance of the <see cref="OutputBase"/> class and detects whether the output is attached to a real terminal device.
     /// </summary>
-    protected OutputBase () => IsAttachedToTerminal = Driver.IsAttachedToTerminal (out _, out _);
+    protected OutputBase ()
+    {
+        IsAttachedToTerminal = Driver.IsAttachedToTerminal (out _, out _);
+        CaptureOutput = !IsAttachedToTerminal;
+        Action<StringBuilder, Attribute, TextStyle> attributeWriter = AppendOrWriteAttribute;
+        _usesLegacyAttributeWriter = attributeWriter.Method.DeclaringType != typeof (OutputBase);
+    }
+
+    private readonly bool _usesLegacyAttributeWriter;
 
     /// <summary>
     ///     Gets whether this output instance is attached to a real terminal device.
@@ -76,9 +84,14 @@ public abstract class OutputBase
 
     private readonly StringBuilder _lastOutputStringBuilder = new ();
     private bool _clearLastOutputPending;
+    private readonly ConcurrentBag<Utf8Buffer> _utf8Buffers = [];
+    private int _retainedBufferCount;
 
-    // Reusable buffer for UTF-8 → UTF-16 decode in Write(ReadOnlySpan<byte>).
-    private char []? _utf16DecodeBuffer;
+    /// <summary>
+    ///     Enables capture for <see cref="GetLastOutput"/>. Headless outputs capture by default
+    ///     for tests; terminal-attached outputs must opt in to avoid decoding every write.
+    /// </summary>
+    public bool CaptureOutput { get; set; }
 
     // Kitty image ids placed on the previous Write, keyed by RasterImageCommand.Id. A single image
     // can occupy more than one placement when its visible region is fragmented by clipping (e.g. a
@@ -118,8 +131,9 @@ public abstract class OutputBase
     /// </summary>
     public virtual void Write (IOutputBuffer buffer)
     {
+        using Utf8BufferLease lease = new (this);
+        Utf8Buffer outputBuffer = lease.Buffer;
         _clearLastOutputPending = true;
-        Utf8Buffer outputBuffer = new ();
         var top = 0;
         var left = 0;
         int rows = buffer.Rows;
@@ -315,8 +329,44 @@ public abstract class OutputBase
             }
 
             SetCursorPositionImpl (s.ScreenPosition.X, s.ScreenPosition.Y);
-            Write (new StringBuilder (s.SixelData));
+            WriteEncodedString (s.SixelData);
             s.IsDirty = false;
+        }
+    }
+
+    private readonly struct Utf8BufferLease : IDisposable
+    {
+        private readonly OutputBase _owner;
+
+        public Utf8BufferLease (OutputBase owner)
+        {
+            _owner = owner;
+
+            if (owner._utf8Buffers.TryTake (out Utf8Buffer? reusable))
+            {
+                Interlocked.Decrement (ref owner._retainedBufferCount);
+                Buffer = reusable;
+            }
+            else
+            {
+                Buffer = new ();
+            }
+        }
+
+        public Utf8Buffer Buffer { get; }
+
+        public void Dispose ()
+        {
+            Buffer.Clear ();
+            Buffer.TrimExcess ();
+
+            if (Interlocked.Increment (ref _owner._retainedBufferCount) == 1)
+            {
+                _owner._utf8Buffers.Add (Buffer);
+                return;
+            }
+
+            Interlocked.Decrement (ref _owner._retainedBufferCount);
         }
     }
 
@@ -338,8 +388,54 @@ public abstract class OutputBase
     /// <param name="output"></param>
     /// <param name="attr"></param>
     /// <param name="redrawTextStyle"></param>
-    protected virtual void AppendOrWriteAttribute (Utf8Buffer output, Attribute attr, TextStyle redrawTextStyle)
+    protected virtual void AppendOrWriteAttribute (StringBuilder output, Attribute attr, TextStyle redrawTextStyle)
     {
+        if (attr.Foreground == Color.None)
+        {
+            EscSeqUtils.CSI_AppendResetForegroundColor (output);
+        }
+        else if (Force16Colors)
+        {
+            output.Append (EscSeqUtils.CSI_SetForegroundColor (attr.Foreground.GetAnsiColorCode ()));
+        }
+        else
+        {
+            EscSeqUtils.CSI_AppendForegroundColorRGB (output, attr.Foreground.R, attr.Foreground.G, attr.Foreground.B);
+        }
+
+        if (attr.Background == Color.None)
+        {
+            EscSeqUtils.CSI_AppendResetBackgroundColor (output);
+        }
+        else if (Force16Colors)
+        {
+            output.Append (EscSeqUtils.CSI_SetBackgroundColor (attr.Background.GetAnsiColorCode ()));
+        }
+        else
+        {
+            EscSeqUtils.CSI_AppendBackgroundColorRGB (output, attr.Background.R, attr.Background.G, attr.Background.B);
+        }
+
+        EscSeqUtils.CSI_AppendTextStyleChange (output, redrawTextStyle, attr.Style);
+    }
+
+    // Keep the pre-#5650 protected StringBuilder hook for downstream subclasses. Only
+    // subclasses that override it take the conversion path; built-in renderers use UTF-8.
+    internal virtual void AppendOrWriteAttributeUtf8 (Utf8Buffer output, Attribute attr, TextStyle redrawTextStyle)
+    {
+        if (_usesLegacyAttributeWriter)
+        {
+            StringBuilder legacyAttributeBuffer = new ();
+            AppendOrWriteAttribute (legacyAttributeBuffer, attr, redrawTextStyle);
+
+            foreach (ReadOnlyMemory<char> chunk in legacyAttributeBuffer.GetChunks ())
+            {
+                output.Append (chunk.Span);
+            }
+
+            return;
+        }
+
         if (attr.Foreground == Color.None)
         {
             output.AppendAscii (EscSeqUtils.CSI);
@@ -405,6 +501,11 @@ public abstract class OutputBase
     /// <param name="output"></param>
     protected virtual void Write (StringBuilder output)
     {
+        if (!CaptureOutput)
+        {
+            return;
+        }
+
         if (_clearLastOutputPending)
         {
             _lastOutputStringBuilder.Clear ();
@@ -421,23 +522,43 @@ public abstract class OutputBase
     /// <param name="output">UTF-8 encoded bytes to write.</param>
     protected virtual void Write (ReadOnlySpan<byte> output)
     {
+        // A subclass built before #5650 may only override Write(StringBuilder).
+        // Route bytes through that virtual sink so rendered cells cannot disappear.
+        Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+    }
+
+    /// <summary>
+    ///     Sends an already constructed raster or control sequence. The default preserves
+    ///     the pre-#5650 StringBuilder sink for downstream output implementations.
+    /// </summary>
+    protected virtual void WriteEncodedString (string output) => Write (new StringBuilder (output));
+
+    /// <summary>Captures a UTF-8 write when output capture is enabled.</summary>
+    protected void CaptureUtf8 (ReadOnlySpan<byte> output)
+    {
+        if (!CaptureOutput)
+        {
+            return;
+        }
+
+        CaptureText (Encoding.UTF8.GetString (output));
+    }
+
+    /// <summary>Captures decoded output when output capture is enabled.</summary>
+    protected void CaptureText (ReadOnlySpan<char> output)
+    {
+        if (!CaptureOutput)
+        {
+            return;
+        }
+
         if (_clearLastOutputPending)
         {
             _lastOutputStringBuilder.Clear ();
             _clearLastOutputPending = false;
         }
 
-        // Decode UTF-8 to UTF-16 for GetLastOutput() using a reusable buffer.
-        // Allocates only when the buffer must grow; stable-state zero-allocation.
-        int maxCharCount = Encoding.UTF8.GetMaxCharCount (output.Length);
-
-        if (_utf16DecodeBuffer is null || _utf16DecodeBuffer.Length < maxCharCount)
-        {
-            _utf16DecodeBuffer = new char [maxCharCount];
-        }
-
-        int charCount = Encoding.UTF8.GetChars (output, _utf16DecodeBuffer);
-        _lastOutputStringBuilder.Append (_utf16DecodeBuffer, 0, charCount);
+        _lastOutputStringBuilder.Append (output);
     }
 
     /// <summary>
@@ -465,9 +586,6 @@ public abstract class OutputBase
         var redrawTextStyle = TextStyle.None;
         string? lastUrl = null;
 
-        // Use Utf8Buffer for cell rendering, then decode to StringBuilder at the end
-        Utf8Buffer utf8Output = new ();
-
         for (int row = startRow; row < endRow; row++)
         {
             for (int col = startCol; col < endCol; col++)
@@ -484,12 +602,12 @@ public abstract class OutputBase
                 {
                     if (lastUrl is { })
                     {
-                        utf8Output.AppendAscii (EscSeqUtils.OSC_EndHyperlink ());
+                        output.Append (EscSeqUtils.OSC_EndHyperlink ());
                     }
 
                     if (!string.IsNullOrEmpty (cellUrl))
                     {
-                        utf8Output.Append (EscSeqUtils.OSC_StartHyperlink (cellUrl));
+                        output.Append (EscSeqUtils.OSC_StartHyperlink (cellUrl));
                     }
 
                     lastUrl = cellUrl;
@@ -497,13 +615,13 @@ public abstract class OutputBase
 
                 Cell cell = buffer.Contents! [row, col];
                 int outputWidth = -1;
-                AppendCellAnsi (cell, utf8Output, ref lastAttr, ref redrawTextStyle, endCol, ref col, ref outputWidth);
+                AppendCellAnsi (cell, output, ref lastAttr, ref redrawTextStyle, endCol, ref col, ref outputWidth);
             }
 
             // Close any open hyperlink at end of row
             if (lastUrl is { })
             {
-                utf8Output.AppendAscii (EscSeqUtils.OSC_EndHyperlink ());
+                output.Append (EscSeqUtils.OSC_EndHyperlink ());
                 lastUrl = null;
             }
 
@@ -514,12 +632,10 @@ public abstract class OutputBase
             // ONLCR tty discipline, so a '\n' row break still recreates the screen correctly.
             if (addNewlines)
             {
-                utf8Output.AppendByte ((byte)'\n');
+                output.Append ('\n');
             }
         }
 
-        // Decode Utf8Buffer back to StringBuilder for ToAnsi() callers
-        output.Append (Encoding.UTF8.GetString (utf8Output.AsSpan ()));
     }
 
     /// <summary>
@@ -533,6 +649,36 @@ public abstract class OutputBase
     /// <param name="currentCol">The current column, updated for wide characters.</param>
     /// <param name="outputWidth">The current output width, updated for wide characters.</param>
     protected void AppendCellAnsi (Cell cell,
+                                   StringBuilder output,
+                                   ref Attribute? lastAttr,
+                                   ref TextStyle redrawTextStyle,
+                                   int maxCol,
+                                   ref int currentCol,
+                                   ref int outputWidth)
+    {
+        Attribute? attribute = cell.Attribute;
+
+        if (attribute.HasValue && attribute.Value != lastAttr)
+        {
+            lastAttr = attribute.Value;
+            AppendOrWriteAttribute (output, attribute.Value, redrawTextStyle);
+            redrawTextStyle = attribute.Value.Style;
+        }
+
+        string grapheme = cell.Grapheme;
+        output.Append (grapheme);
+        outputWidth++;
+
+        if (grapheme.GetColumns () <= 1 || currentCol + 1 >= maxCol)
+        {
+            return;
+        }
+
+        currentCol++;
+        outputWidth++;
+    }
+
+    private void AppendCellAnsi (Cell cell,
                                    Utf8Buffer output,
                                    ref Attribute? lastAttr,
                                    ref TextStyle redrawTextStyle,
@@ -546,7 +692,7 @@ public abstract class OutputBase
         if (attribute.HasValue && attribute.Value != lastAttr)
         {
             lastAttr = attribute.Value;
-            AppendOrWriteAttribute (output, attribute.Value, redrawTextStyle);
+            AppendOrWriteAttributeUtf8 (output, attribute.Value, redrawTextStyle);
             redrawTextStyle = attribute.Value.Style;
         }
 
@@ -649,9 +795,6 @@ public abstract class OutputBase
         var redrawTextStyle = TextStyle.None;
         string? lastUrl = null;
 
-        // Use Utf8Buffer for cell rendering, then decode to StringBuilder at the end
-        Utf8Buffer utf8Output = new ();
-
         for (int row = startRow; row < endRow; row++)
         {
             for (int col = startCol; col < endCol; col++)
@@ -660,14 +803,14 @@ public abstract class OutputBase
                 {
                     if (lastUrl is { })
                     {
-                        utf8Output.AppendAscii (EscSeqUtils.OSC_EndHyperlink ());
+                        output.Append (EscSeqUtils.OSC_EndHyperlink ());
                         lastUrl = null;
                     }
 
                     continue;
                 }
 
-                utf8Output.Append (EscSeqUtils.CSI_SetCursorPosition (row + 1, col + 1));
+                output.Append (EscSeqUtils.CSI_SetCursorPosition (row + 1, col + 1));
                 lastAttr = null;
                 redrawTextStyle = TextStyle.None;
 
@@ -686,12 +829,12 @@ public abstract class OutputBase
                     {
                         if (lastUrl is { })
                         {
-                            utf8Output.AppendAscii (EscSeqUtils.OSC_EndHyperlink ());
+                            output.Append (EscSeqUtils.OSC_EndHyperlink ());
                         }
 
                         if (!string.IsNullOrEmpty (cellUrl))
                         {
-                            utf8Output.Append (EscSeqUtils.OSC_StartHyperlink (cellUrl));
+                            output.Append (EscSeqUtils.OSC_StartHyperlink (cellUrl));
                         }
 
                         lastUrl = cellUrl;
@@ -699,19 +842,17 @@ public abstract class OutputBase
 
                     Cell cell = buffer.Contents! [row, col];
                     int outputWidth = -1;
-                    AppendCellAnsi (cell, utf8Output, ref lastAttr, ref redrawTextStyle, endCol, ref col, ref outputWidth);
+                    AppendCellAnsi (cell, output, ref lastAttr, ref redrawTextStyle, endCol, ref col, ref outputWidth);
                 }
             }
 
             if (lastUrl is { })
             {
-                utf8Output.AppendAscii (EscSeqUtils.OSC_EndHyperlink ());
+                output.Append (EscSeqUtils.OSC_EndHyperlink ());
                 lastUrl = null;
             }
         }
 
-        // Decode Utf8Buffer back to StringBuilder for ToAnsi() callers
-        output.Append (Encoding.UTF8.GetString (utf8Output.AsSpan ()));
     }
 
     private void ClearKittyRasterBlankCells (IOutputBuffer buffer)
@@ -864,7 +1005,7 @@ public abstract class OutputBase
 
             if (_kittyCurrentImageId.TryGetValue (id, out int residentImageId))
             {
-                Write (new StringBuilder (KittyGraphicsEncoder.EncodeDeletePlacements (residentImageId)));
+                WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (residentImageId));
             }
 
             vanishedSourceCrop.Add (id);
@@ -883,7 +1024,7 @@ public abstract class OutputBase
     {
         foreach (int imageId in imageIds)
         {
-            Write (new StringBuilder (KittyGraphicsEncoder.EncodeDeletePlacements (imageId)));
+            WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (imageId));
         }
     }
 
@@ -950,7 +1091,7 @@ public abstract class OutputBase
 
                 int imageId = trackKitty ? GetKittyImageId (command.Id!, rectIndex) : 0;
                 SetCursorPositionImpl (visibleCells.X, visibleCells.Y);
-                Write (new StringBuilder (GetRasterImageData (command, visibleCells, pixels, imageId)));
+                WriteEncodedString (GetRasterImageData (command, visibleCells, pixels, imageId));
 
                 if (trackKitty)
                 {
@@ -997,7 +1138,7 @@ public abstract class OutputBase
             // Double-buffer: transmit the new pixels to the OTHER image id, so the image currently on
             // screen stays intact while the new one loads; the new placement is then drawn on top below.
             imageId = previousImageId == idA ? idB : idA;
-            Write (new StringBuilder (new KittyGraphicsEncoder ().EncodeTransmit (command.Pixels!, imageId)));
+            WriteEncodedString (new KittyGraphicsEncoder ().EncodeTransmit (command.Pixels!, imageId));
             _kittyTransmittedImage [command.Id!] = command.Pixels!;
             _kittyTransmittedVersion [command.Id!] = command.SourceVersion;
             _kittyCurrentImageId [command.Id!] = imageId;
@@ -1012,14 +1153,14 @@ public abstract class OutputBase
             int placementId = index + 1;
             SetCursorPositionImpl (visibleCells.X, visibleCells.Y);
 
-            Write (new StringBuilder (KittyGraphicsEncoder.EncodePut (imageId,
+            WriteEncodedString (KittyGraphicsEncoder.EncodePut (imageId,
                                                                       placementId,
                                                                       srcSub.X,
                                                                       srcSub.Y,
                                                                       srcSub.Width,
                                                                       srcSub.Height,
                                                                       visibleCells.Width,
-                                                                      visibleCells.Height)));
+                                                                      visibleCells.Height));
             placementIds.Add (placementId);
             index++;
         }
@@ -1028,7 +1169,7 @@ public abstract class OutputBase
         // pixels were visible right up to this point, so the swap never blanks.
         if (pixelsChanged && previousImageId != 0 && previousImageId != imageId)
         {
-            Write (new StringBuilder (KittyGraphicsEncoder.EncodeDeletePlacements (previousImageId)));
+            WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (previousImageId));
         }
 
         // Fewer fragments than last frame (e.g. a clip hole closed): delete the now-unused placements so
@@ -1039,7 +1180,7 @@ public abstract class OutputBase
             {
                 if (!placementIds.Contains (pid))
                 {
-                    Write (new StringBuilder (KittyGraphicsEncoder.EncodeDeletePlacement (imageId, pid)));
+                    WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacement (imageId, pid));
                 }
             }
         }

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 
 namespace DriverTests.Output;
@@ -25,6 +26,17 @@ public class Utf8BufferTests
 
         Assert.Equal (5, buffer.Length);
         Assert.Equal ("Hello", Encoding.UTF8.GetString (buffer.AsSpan ()));
+    }
+
+    // Codex - GPT-6
+    [Fact]
+    public void AppendAscii_NonAscii_FallsBackToUtf8 ()
+    {
+        Utf8Buffer buffer = new ();
+
+        buffer.AppendAscii ("é中");
+
+        Assert.Equal ("é中", Encoding.UTF8.GetString (buffer.AsSpan ()));
     }
 
     [Fact]
@@ -156,6 +168,9 @@ public class Utf8BufferTests
     [InlineData (999)]
     [InlineData (1000)]
     [InlineData (int.MaxValue)]
+    [InlineData (int.MinValue)]
+    [InlineData (-1)]
+    [InlineData (-1000)]
     public void AppendInt_VariousValues_MatchesToString (int value)
     {
         Utf8Buffer buffer = new ();
@@ -270,6 +285,31 @@ public class Utf8BufferTests
 
         Assert.Equal (1500, buffer.Length);
         Assert.Equal (large, Encoding.UTF8.GetString (buffer.AsSpan ()));
+    }
+
+    // Codex - GPT-6
+    [Fact]
+    public void TrimExcess_ReleasesLargeBackingArrayAfterClear ()
+    {
+        Utf8Buffer buffer = new ();
+        buffer.Append (new string ('x', Utf8Buffer.RetainedCapacityLimit + 1));
+        Assert.True (buffer.Capacity > Utf8Buffer.RetainedCapacityLimit);
+
+        buffer.Clear ();
+        buffer.TrimExcess ();
+
+        Assert.Equal (256, buffer.Capacity);
+    }
+
+    // Codex - GPT-6
+    [Fact]
+    public void EnsureCapacity_ChecksOverflowBeforeArrayAccess ()
+    {
+        Utf8Buffer buffer = new ();
+        FieldInfo lengthField = typeof (Utf8Buffer).GetField ("_length", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        lengthField.SetValue (buffer, int.MaxValue);
+
+        Assert.Throws<OutOfMemoryException> (() => buffer.AppendByte ((byte)'X'));
     }
 
     [Fact]
