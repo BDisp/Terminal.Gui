@@ -62,19 +62,37 @@ internal partial class ApplicationImpl
             return operation.Task;
         }
 
-        try
+        Timeout timeout = new ()
         {
-            object timeout = TimedEvents.Add (TimeSpan.Zero, () =>
+            Span = TimeSpan.Zero,
+            Callback = () =>
             {
                 operation.Execute ();
 
                 return false;
-            });
-            operation.SetTimeout (timeout);
+            }
+        };
+
+        try
+        {
+            object timeoutToken = TimedEvents.Add (timeout);
+            operation.SetTimeout (timeoutToken);
         }
         catch (Exception ex)
         {
-            operation.Fail (ex);
+            Exception failure = ex;
+
+            try
+            {
+                // Added handlers run after insertion and can throw before Add returns its token.
+                TimedEvents.Remove (timeout);
+            }
+            catch (Exception cleanupEx)
+            {
+                failure = new AggregateException (ex, cleanupEx);
+            }
+
+            operation.Fail (failure);
         }
 
         return operation.Task;

@@ -9,13 +9,13 @@ Terminal.Gui applications run on a single main thread with an event loop that pr
 Terminal.Gui follows the standard UI toolkit pattern where **all UI operations must happen on the main thread**. Attempting to modify views or their properties from background threads will result in undefined behavior and potential crashes.
 
 ### The Golden Rule
-> Always use `App?.Invoke()` (from within a View), `app.Invoke()`, or `app.InvokeAsync()` to update the UI from background threads.
+> Always use `App?.Invoke ()` (from within a View), `app.Invoke ()`, or `app.InvokeAsync ()` to update the UI from background threads.
 
 ## Background Operations
 
 ### Await a UI update owned by a session
 
-To wait until a background result has been applied to the UI, call `app.InvokeAsync`. Pass the session token when the callback references views owned by a runnable. The token can be obtained from `app.Begin(...)` or from `app.SessionBegun` after `app.Run(...)` starts the session.
+To wait until a background result has been applied to the UI, call `app.InvokeAsync`. Pass the session token when the callback references views owned by a runnable. The token can be obtained from `app.Begin (...)` or from `app.SessionBegun` after `app.Run (...)` starts the session.
 
 ```csharp
 // Called while the window's session is running. It may have ended before this lookup.

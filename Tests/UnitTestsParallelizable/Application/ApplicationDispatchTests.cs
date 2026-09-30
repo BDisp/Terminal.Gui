@@ -37,6 +37,33 @@ public class ApplicationDispatchTests
         }
     }
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void AddedHandlerFailure_DoesNotLeaveDispatchTimeoutQueued ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        TimedEvents timedEvents = Assert.IsType<TimedEvents> (app.TimedEvents);
+        InvalidOperationException failure = new ("Added handler failure.");
+        EventHandler<TimeoutEventArgs> handler = (_, _) => throw failure;
+        timedEvents.Added += handler;
+
+        try
+        {
+            bool ran = false;
+            Task dispatch = app.InvokeAsync (() => ran = true, TestContext.Current.CancellationToken);
+
+            Assert.True (dispatch.IsFaulted);
+            Assert.Same (failure, dispatch.Exception!.InnerException);
+            Assert.Empty (timedEvents.Timeouts);
+            Assert.False (ran);
+        }
+        finally
+        {
+            timedEvents.Added -= handler;
+            app.Dispose ();
+        }
+    }
+
     [Fact]
     public void UiThreadDispatch_CompletesImmediately ()
     {
