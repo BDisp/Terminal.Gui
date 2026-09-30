@@ -13,6 +13,25 @@ Terminal.Gui follows the standard UI toolkit pattern where **all UI operations m
 
 ## Background Operations
 
+### Await a UI update owned by a session
+
+To wait until a background result has been applied to the UI, call `app.InvokeAsync`. Pass the session token when the callback references views owned by a runnable. The token can be obtained from `app.Begin(...)` or from `app.SessionBegun` after `app.Run(...)` starts the session.
+
+```csharp
+// Called while the window's session is running.
+SessionToken owner = app.SessionStack!.First (token => ReferenceEquals (token.Runnable, window));
+
+await Task.Run (async () =>
+{
+    string result = await LoadDataAsync ().ConfigureAwait (false);
+    await app.InvokeAsync (owner, () => statusLabel.Text = result).ConfigureAwait (false);
+});
+```
+
+`InvokeAsync` completes after the callback runs on the UI thread. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. Catch `OperationCanceledException` when that outcome is expected. Exceptions thrown by the callback fault the returned task; they do not reach the main-loop error handler. A UI-thread call during a running view-backed session executes immediately and returns an already completed or faulted task. To cancel a specific request, pass its `CancellationToken` as the final argument. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
+
+This dispatch API is provided by Terminal.Gui's application implementation. A custom `IApplication` implementation must provide its own dispatch support.
+
 ### Using async/await (Recommended)
 
 The preferred way to handle background work is using C#'s async/await pattern:

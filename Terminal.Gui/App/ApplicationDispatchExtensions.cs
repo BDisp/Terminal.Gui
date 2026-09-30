@@ -1,0 +1,79 @@
+namespace Terminal.Gui.App;
+
+/// <summary>Provides awaitable UI dispatch for Terminal.Gui application instances.</summary>
+public static class ApplicationDispatchExtensions
+{
+    /// <summary>Runs <paramref name="action"/> on the UI thread and completes after it returns.</summary>
+    /// <param name="app">The application that owns the UI thread.</param>
+    /// <param name="action">The action to run.</param>
+    /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
+    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <remarks>
+    ///     The action runs immediately when called on the UI thread during a running view-backed session. Otherwise it is queued
+    ///     for the next main-loop iteration. Exceptions from the action fault the task and do not enter the main-loop
+    ///     error handler. Pending dispatches are canceled when the application is disposed or its final session ends.
+    ///     Dispatches queued after initialization but before the first session wait for that session to start.
+    /// </remarks>
+    /// <exception cref="NotInitializedException">The application is not initialized or is shutting down.</exception>
+    /// <exception cref="NotSupportedException">The application does not support awaitable dispatch.</exception>
+    public static Task InvokeAsync (this IApplication app, Action action, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull (action);
+
+        return GetImplementation (app).InvokeAsyncCore (_ => action (), null, cancellationToken);
+    }
+
+    /// <summary>Runs <paramref name="action"/> on the UI thread and completes after it returns.</summary>
+    /// <param name="app">The application that owns the UI thread.</param>
+    /// <param name="action">The action to run with the application instance.</param>
+    /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
+    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <inheritdoc cref="InvokeAsync(IApplication, Action, CancellationToken)" path="/remarks|/exception"/>
+    public static Task InvokeAsync (this IApplication app, Action<IApplication> action, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull (action);
+
+        return GetImplementation (app).InvokeAsyncCore (action, null, cancellationToken);
+    }
+
+    /// <summary>Runs <paramref name="action"/> while <paramref name="owner"/> is active.</summary>
+    /// <param name="app">The application that owns the UI thread.</param>
+    /// <param name="owner">The session that owns the action's referenced views.</param>
+    /// <param name="action">The action to run.</param>
+    /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
+    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <remarks>
+    ///     The owner may be an outer session while an inner modal is running. Ending the owner cancels its pending
+    ///     dispatches; ending another session does not. An owner that has already ended yields a canceled task.
+    /// </remarks>
+    /// <inheritdoc cref="InvokeAsync(IApplication, Action, CancellationToken)" path="/exception"/>
+    public static Task InvokeAsync (this IApplication app, SessionToken owner, Action action, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull (owner);
+        ArgumentNullException.ThrowIfNull (action);
+
+        return GetImplementation (app).InvokeAsyncCore (_ => action (), owner, cancellationToken);
+    }
+
+    /// <summary>Runs <paramref name="action"/> while <paramref name="owner"/> is active.</summary>
+    /// <param name="app">The application that owns the UI thread.</param>
+    /// <param name="owner">The session that owns the action's referenced views.</param>
+    /// <param name="action">The action to run with the application instance.</param>
+    /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
+    /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
+    /// <inheritdoc cref="InvokeAsync(IApplication, SessionToken, Action, CancellationToken)" path="/remarks|/exception"/>
+    public static Task InvokeAsync (this IApplication app, SessionToken owner, Action<IApplication> action, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull (owner);
+        ArgumentNullException.ThrowIfNull (action);
+
+        return GetImplementation (app).InvokeAsyncCore (action, owner, cancellationToken);
+    }
+
+    private static ApplicationImpl GetImplementation (IApplication app)
+    {
+        ArgumentNullException.ThrowIfNull (app);
+
+        return app as ApplicationImpl ?? throw new NotSupportedException ("This IApplication implementation does not support awaitable UI dispatch.");
+    }
+}

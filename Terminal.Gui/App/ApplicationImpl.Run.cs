@@ -513,7 +513,14 @@ internal partial class ApplicationImpl
 
         // Clear the Runnable from the token
         token.Runnable = null;
+        CancelOwnedDispatches (token);
         HasEndedSession = true;
+
+        if (TopRunnable is null)
+        {
+            CancelPendingDispatches (false);
+        }
+
         SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
 
         // Restore the ambient context the caller had at Begin, so an await after a directly-begun

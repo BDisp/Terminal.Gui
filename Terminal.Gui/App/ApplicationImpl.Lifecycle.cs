@@ -75,7 +75,11 @@ internal partial class ApplicationImpl
 
         CreateDriver (_driverName);
 
-        Initialized = true;
+        lock (_dispatchLock)
+        {
+            _dispatchStopping = false;
+            Initialized = true;
+        }
 
         RaiseInitializedChanged (this, new EventArgs<bool> (true));
         SubscribeDriverEvents ();
@@ -158,6 +162,8 @@ internal partial class ApplicationImpl
     /// </summary>
     private void DisposeCore ()
     {
+        CancelPendingDispatches (true);
+
         // Stop the coordinator if running
         Coordinator?.Stop ();
 
@@ -226,6 +232,8 @@ internal partial class ApplicationImpl
         // e.g. see Issue #537
 
         Trace.Lifecycle (MainThreadId?.ToString (), "Shutdown");
+
+        CancelPendingDispatches (true);
 
         // === 0. Stop all timers ===
         TimedEvents.StopAll ();
