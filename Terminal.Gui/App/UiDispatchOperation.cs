@@ -25,6 +25,8 @@ internal sealed class UiDispatchOperation
 
     internal bool IsPending => Volatile.Read (ref _state) == 0;
 
+    internal bool TryStart () => Interlocked.CompareExchange (ref _state, 1, 0) == 0;
+
     internal void RegisterCancellation ()
     {
         if (!_cancellationToken.CanBeCanceled)
@@ -59,15 +61,10 @@ internal sealed class UiDispatchOperation
 
     internal void Execute ()
     {
-        if (_cancellationToken.IsCancellationRequested || Owner is { Runnable: null })
+        if (_cancellationToken.IsCancellationRequested || !_app.TryStartDispatch (this))
         {
             Cancel ();
 
-            return;
-        }
-
-        if (Interlocked.CompareExchange (ref _state, 1, 0) != 0)
-        {
             return;
         }
 

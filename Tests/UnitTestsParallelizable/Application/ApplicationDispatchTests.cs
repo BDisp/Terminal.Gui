@@ -417,6 +417,60 @@ public class ApplicationDispatchTests
     }
 
     [Fact]
+    public void ConcurrentSessionEnd_DoesNotRunUnstartedOwnedDispatches ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        const int count = 2_000;
+        Task? [] dispatches = new Task? [count];
+        using ManualResetEventSlim firstQueued = new ();
+        int ran = 0;
+        Exception? producerFailure = null;
+
+        try
+        {
+            Thread producer = new (() =>
+            {
+                try
+                {
+                    for (int i = 0; i < dispatches.Length; i++)
+                    {
+                        dispatches [i] = app.InvokeAsync (owner, () => Interlocked.Increment (ref ran));
+
+                        if (i == 0)
+                        {
+                            firstQueued.Set ();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    producerFailure = ex;
+                    firstQueued.Set ();
+                }
+            });
+            producer.Start ();
+            Assert.True (firstQueued.Wait (TimeSpan.FromSeconds (10), TestContext.Current.CancellationToken));
+            app.End (owner);
+            producer.Join ();
+            Assert.Null (producerFailure);
+
+            app.TimedEvents!.RunTimers ();
+
+            Assert.All (dispatches, dispatch => Assert.True (dispatch?.IsCanceled));
+            Assert.Equal (0, ran);
+            Assert.Empty (app.TimedEvents.Timeouts);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
     public void EndingSession_RemovesManyPendingDispatchesWithoutTouchingOtherTimeouts ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
@@ -709,6 +763,27 @@ public class ApplicationDispatchTests
         app.Dispose ();
 
         Assert.Throws<NotInitializedException> (() => { _ = app.InvokeAsync (() => { }, TestContext.Current.CancellationToken); });
+    }
+
+    [Fact]
+    public void ShutdownTakesPrecedenceOverAlreadyCanceledToken ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        using CancellationTokenSource cancellation = new ();
+        cancellation.Cancel ();
+        FieldInfo stoppingField = typeof (ApplicationImpl).GetField ("_dispatchStopping", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        try
+        {
+            stoppingField.SetValue (app, true);
+
+            Assert.Throws<NotInitializedException> (() => { _ = app.InvokeAsync (() => { }, cancellation.Token); });
+        }
+        finally
+        {
+            stoppingField.SetValue (app, false);
+            app.Dispose ();
+        }
     }
 
     [Fact]

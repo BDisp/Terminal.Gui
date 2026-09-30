@@ -519,15 +519,7 @@ internal partial class ApplicationImpl
 
         Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
 
-        // Clear the Runnable from the token
-        token.Runnable = null;
-        HasEndedSession = true;
-        CancelOwnedDispatches (token);
-
-        if (!HasRunningSession)
-        {
-            CancelPendingDispatches (false);
-        }
+        EndSessionDispatches (token);
 
         SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
 

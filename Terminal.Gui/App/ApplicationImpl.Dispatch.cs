@@ -18,18 +18,18 @@ internal partial class ApplicationImpl
             throw new NotInitializedException (nameof (ApplicationDispatchExtensions.InvokeAsync));
         }
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return Task.FromCanceled (cancellationToken);
-        }
-
-        UiDispatchOperation operation = new (this, action, owner, cancellationToken);
+        UiDispatchOperation operation;
 
         lock (_dispatchLock)
         {
             if (!Initialized || _dispatchStopping)
             {
                 throw new NotInitializedException (nameof (ApplicationDispatchExtensions.InvokeAsync));
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled (cancellationToken);
             }
 
             if (owner is { })
@@ -44,6 +44,7 @@ internal partial class ApplicationImpl
                 return Task.FromCanceled (new CancellationToken (true));
             }
 
+            operation = new (this, action, owner, cancellationToken);
             _pendingDispatches.Add (operation);
         }
 
@@ -87,13 +88,34 @@ internal partial class ApplicationImpl
         }
     }
 
-    private void CancelOwnedDispatches (SessionToken owner)
+    internal bool TryStartDispatch (UiDispatchOperation operation)
+    {
+        lock (_dispatchLock)
+        {
+            if (_dispatchStopping
+                || operation.Owner is { Runnable: null }
+                || (operation.Owner is null && HasEndedSession && !HasRunningSession))
+            {
+                return false;
+            }
+
+            return operation.TryStart ();
+        }
+    }
+
+    private void EndSessionDispatches (SessionToken owner)
     {
         UiDispatchOperation [] pending;
 
         lock (_dispatchLock)
         {
-            pending = _pendingDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();
+            // Invalidate the owner and select pending work in the same critical section as admission
+            // and dispatch start. Non-top ended tokens can remain in SessionStack.
+            owner.Runnable = null;
+            HasEndedSession = true;
+            pending = HasRunningSession
+                          ? _pendingDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ()
+                          : _pendingDispatches.ToArray ();
         }
 
         CancelDispatches (pending);
