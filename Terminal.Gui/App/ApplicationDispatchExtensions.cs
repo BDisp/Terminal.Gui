@@ -9,10 +9,11 @@ public static class ApplicationDispatchExtensions
     /// <param name="cancellationToken">Cancels the dispatch if execution has not started.</param>
     /// <returns>A task that completes after the action runs, or is canceled if dispatch is canceled first.</returns>
     /// <remarks>
-    ///     The action runs immediately when called on the UI thread during a running view-backed session. Otherwise it is queued
+    ///     The action runs immediately when called on the UI thread during a running session. Otherwise it is queued
     ///     for the next main-loop iteration. Exceptions from the action fault the task and do not enter the main-loop
     ///     error handler. Pending dispatches are canceled when the application is disposed or its final session ends.
     ///     Dispatches queued after initialization but before the first session wait for that session to start.
+    ///     To observe action failures, await or otherwise inspect the returned task.
     /// </remarks>
     /// <exception cref="NotInitializedException">The application is not initialized or is shutting down.</exception>
     /// <exception cref="NotSupportedException">The application does not support awaitable dispatch.</exception>
@@ -20,7 +21,7 @@ public static class ApplicationDispatchExtensions
     {
         ArgumentNullException.ThrowIfNull (action);
 
-        return GetImplementation (app).InvokeAsyncCore (_ => action (), null, cancellationToken);
+        return GetDispatcher (app).InvokeAsync (_ => action (), null, cancellationToken);
     }
 
     /// <summary>Runs <paramref name="action"/> on the UI thread and completes after it returns.</summary>
@@ -33,7 +34,7 @@ public static class ApplicationDispatchExtensions
     {
         ArgumentNullException.ThrowIfNull (action);
 
-        return GetImplementation (app).InvokeAsyncCore (action, null, cancellationToken);
+        return GetDispatcher (app).InvokeAsync (action, null, cancellationToken);
     }
 
     /// <summary>Runs <paramref name="action"/> while <paramref name="owner"/> is active.</summary>
@@ -52,7 +53,7 @@ public static class ApplicationDispatchExtensions
         ArgumentNullException.ThrowIfNull (owner);
         ArgumentNullException.ThrowIfNull (action);
 
-        return GetImplementation (app).InvokeAsyncCore (_ => action (), owner, cancellationToken);
+        return GetDispatcher (app).InvokeAsync (_ => action (), owner, cancellationToken);
     }
 
     /// <summary>Runs <paramref name="action"/> while <paramref name="owner"/> is active.</summary>
@@ -67,13 +68,13 @@ public static class ApplicationDispatchExtensions
         ArgumentNullException.ThrowIfNull (owner);
         ArgumentNullException.ThrowIfNull (action);
 
-        return GetImplementation (app).InvokeAsyncCore (action, owner, cancellationToken);
+        return GetDispatcher (app).InvokeAsync (action, owner, cancellationToken);
     }
 
-    private static ApplicationImpl GetImplementation (IApplication app)
+    private static IApplicationAsyncDispatcher GetDispatcher (IApplication app)
     {
         ArgumentNullException.ThrowIfNull (app);
 
-        return app as ApplicationImpl ?? throw new NotSupportedException ("This IApplication implementation does not support awaitable UI dispatch.");
+        return app as IApplicationAsyncDispatcher ?? throw new NotSupportedException ("This IApplication implementation does not support awaitable UI dispatch.");
     }
 }

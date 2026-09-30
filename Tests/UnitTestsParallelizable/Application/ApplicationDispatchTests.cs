@@ -1,9 +1,12 @@
-// Codex - GPT-6
+// CoPilot - GPT-6
 #nullable enable
+
+using System.Reflection;
+using Moq;
 
 namespace ApplicationTests;
 
-[Collection ("Application Tests")]
+[Collection ("Application Dispatch Tests")]
 public class ApplicationDispatchTests
 {
     [Fact]
@@ -57,6 +60,31 @@ public class ApplicationDispatchTests
         {
             app.End (owner);
             runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void UiThreadDispatch_AlsoRunsInlineForNonViewRunnable ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Mock<IRunnable> runnable = new ();
+        runnable.SetupGet (instance => instance.IsRunning).Returns (true);
+        PropertyInfo topProperty = typeof (ApplicationImpl).GetProperty (nameof (ApplicationImpl.TopRunnable))!;
+
+        try
+        {
+            topProperty.SetValue (app, runnable.Object);
+            bool ran = false;
+
+            Task dispatch = app.InvokeAsync (() => ran = true, TestContext.Current.CancellationToken);
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (ran);
+        }
+        finally
+        {
+            topProperty.SetValue (app, null);
             app.Dispose ();
         }
     }
@@ -220,6 +248,232 @@ public class ApplicationDispatchTests
         }
         finally
         {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public async Task FinalSessionEndOrDispose_ResumesUiAwaiters (bool dispose)
+    {
+        for (int round = 0; round < 5; round++)
+        {
+            IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+            Runnable runnable = new ();
+            SessionToken owner = app.Begin (runnable)!;
+            using CountdownEvent queued = new (40);
+            Task [] handlers = new Task [40];
+
+            async Task Handler ()
+            {
+                try
+                {
+                    await Task.Run (async () =>
+                    {
+                        Task dispatch = app.InvokeAsync (owner, () => { });
+                        queued.Signal ();
+                        await dispatch.ConfigureAwait (false);
+                    }, TestContext.Current.CancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The session ended before the queued UI action started.
+                }
+            }
+
+            try
+            {
+                for (int i = 0; i < handlers.Length; i++)
+                {
+                    handlers [i] = Handler ();
+                }
+
+                Assert.True (queued.Wait (TimeSpan.FromSeconds (10), TestContext.Current.CancellationToken));
+
+                if (dispose)
+                {
+                    app.Dispose ();
+                }
+                else
+                {
+                    app.End (owner);
+                }
+
+                await Task.WhenAll (handlers).WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken);
+                Assert.All (handlers, handler => Assert.True (handler.IsCompletedSuccessfully));
+            }
+            finally
+            {
+                runnable.Dispose ();
+                app.Dispose ();
+            }
+        }
+    }
+
+    [Fact]
+    public void OuterOwnedDispatch_RemainsValidWithNoCachedTopRunnable ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        SessionToken innerToken = app.Begin (inner)!;
+        app.End (innerToken);
+        PropertyInfo topProperty = typeof (ApplicationImpl).GetProperty (nameof (ApplicationImpl.TopRunnable))!;
+        IRunnable? savedTop = app.TopRunnable;
+
+        try
+        {
+            topProperty.SetValue (app, null);
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (outerToken, () => { }));
+            topProperty.SetValue (app, savedTop);
+            app.TimedEvents!.RunTimers ();
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            topProperty.SetValue (app, savedTop);
+            app.End (outerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void EndingNonTopSession_PreservesInnerOwnedDispatch ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        SessionToken innerToken = app.Begin (inner)!;
+
+        try
+        {
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (innerToken, () => { }));
+            app.End (outerToken);
+            app.TimedEvents!.RunTimers ();
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (inner.IsRunning);
+        }
+        finally
+        {
+            app.End (innerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void EndingSession_RemovesManyPendingDispatchesWithoutTouchingOtherTimeouts ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+
+        try
+        {
+            object unrelated = app.AddTimeout (TimeSpan.FromHours (1), () => false)!;
+            Task [] dispatches = new Task [500];
+            Thread worker = new (() =>
+            {
+                for (int i = 0; i < dispatches.Length; i++)
+                {
+                    dispatches [i] = app.InvokeAsync (owner, () => { });
+                }
+            });
+            worker.Start ();
+            worker.Join ();
+
+            app.End (owner);
+
+            Assert.All (dispatches, dispatch => Assert.True (dispatch.IsCanceled));
+            Assert.Single (app.TimedEvents!.Timeouts);
+            Assert.True (app.TimedEvents.Remove (unrelated));
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void BulkTimeoutRemoval_RemovesAllOccurrencesOfEachToken ()
+    {
+        TimedEvents timedEvents = new ();
+        Terminal.Gui.App.Timeout repeated = new () { Span = TimeSpan.Zero, Callback = () => true };
+        timedEvents.Add (repeated);
+        timedEvents.Add (repeated);
+        object unrelated = timedEvents.Add (TimeSpan.FromHours (1), () => false);
+
+        timedEvents.RemoveMany ([repeated]);
+
+        Assert.Single (timedEvents.Timeouts);
+        Assert.True (timedEvents.Remove (unrelated));
+    }
+
+    [Fact]
+    public void ConcurrentCancellationDuringQueueing_LeavesNoTimeouts ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        const int count = 5_000;
+        Task [] dispatches = new Task [count];
+        CancellationTokenSource [] sources = new CancellationTokenSource [count];
+        int published = -1;
+
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                sources [i] = new CancellationTokenSource ();
+            }
+
+            Thread canceller = new (() =>
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    if (!SpinWait.SpinUntil (() => Volatile.Read (ref published) >= i, TimeSpan.FromSeconds (10)))
+                    {
+                        return;
+                    }
+                    sources [i].Cancel ();
+                }
+            });
+            canceller.Start ();
+
+            Thread producer = new (() =>
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    Volatile.Write (ref published, i);
+                    dispatches [i] = app.InvokeAsync (owner, () => { }, sources [i].Token);
+                }
+            });
+            producer.Start ();
+            producer.Join ();
+            canceller.Join ();
+
+            Assert.All (dispatches, dispatch => Assert.True (dispatch.IsCanceled));
+            Assert.Empty (app.TimedEvents!.Timeouts);
+        }
+        finally
+        {
+            foreach (CancellationTokenSource source in sources)
+            {
+                source?.Dispose ();
+            }
+
+            app.End (owner);
             runnable.Dispose ();
             app.Dispose ();
         }
@@ -409,6 +663,20 @@ public class ApplicationDispatchTests
         app.Dispose ();
 
         Assert.Throws<NotInitializedException> (() => { _ = app.InvokeAsync (() => { }, TestContext.Current.CancellationToken); });
+    }
+
+    [Fact]
+    public void CustomApplicationCanProvideAwaitableDispatch ()
+    {
+        Mock<IApplication> app = new ();
+        Mock<IApplicationAsyncDispatcher> dispatcher = app.As<IApplicationAsyncDispatcher> ();
+        dispatcher.Setup (instance => instance.InvokeAsync (It.IsAny<Action<IApplication>> (), null, It.IsAny<CancellationToken> ()))
+                  .Returns (Task.CompletedTask);
+
+        Task dispatch = app.Object.InvokeAsync (() => { }, TestContext.Current.CancellationToken);
+
+        Assert.True (dispatch.IsCompletedSuccessfully);
+        dispatcher.Verify (instance => instance.InvokeAsync (It.IsAny<Action<IApplication>> (), null, TestContext.Current.CancellationToken), Times.Once);
     }
 
     private static Task QueueOnWorker (Func<Task> dispatch)

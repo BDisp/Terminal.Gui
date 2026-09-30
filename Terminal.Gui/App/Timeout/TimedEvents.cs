@@ -194,6 +194,62 @@ public class TimedEvents : ITimedEvents
         }
     }
 
+    /// <summary>Removes several timeout tokens in one pass over the queue.</summary>
+    internal void RemoveMany (IEnumerable<object> tokens)
+    {
+        HashSet<Timeout> timeouts = new (ReferenceEqualityComparer.Instance);
+
+        foreach (object token in tokens)
+        {
+            if (token is Timeout timeout)
+            {
+                timeouts.Add (timeout);
+            }
+        }
+
+        if (timeouts.Count == 0)
+        {
+            return;
+        }
+
+        lock (_timeoutsLockToken)
+        {
+            SortedList<long, Timeout> retained = new (_timeouts.Count);
+
+            for (int i = 0; i < _timeouts.Count; i++)
+            {
+                long key = _timeouts.Keys [i];
+                Timeout timeout = _timeouts.Values [i];
+
+                if (!timeouts.Contains (timeout))
+                {
+                    retained.Add (key, timeout);
+
+                    continue;
+                }
+
+                bool occurrenceRemoved = _queuedTimeoutOccurrenceIds.Remove (key);
+                Debug.Assert (occurrenceRemoved);
+            }
+
+            _timeouts = retained;
+
+            foreach (Timeout timeout in timeouts)
+            {
+                if (!_activeTimeoutStates.TryGetValue (timeout, out ActiveTimeoutState state)
+                    || state.StopAllEpoch != _stopAllEpoch
+                    || state.UncancelledActiveCount == 0)
+                {
+                    continue;
+                }
+
+                state.RemovalGeneration++;
+                state.UncancelledActiveCount = 0;
+                _activeTimeoutStates [timeout] = state;
+            }
+        }
+    }
+
     /// <inheritdoc/>
     public object Add (TimeSpan time, Func<bool> callback)
     {

@@ -6,6 +6,7 @@ internal sealed class UiDispatchOperation
     private readonly ApplicationImpl _app;
     private readonly CancellationToken _cancellationToken;
     private readonly TaskCompletionSource _completion = new (TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Lock _registrationLock = new ();
     private CancellationTokenRegistration _registration;
     private object? _timeout;
     private int _state;
@@ -31,17 +32,24 @@ internal sealed class UiDispatchOperation
             return;
         }
 
-        _registration = _cancellationToken.Register (static state => ((UiDispatchOperation)state!).Cancel (), this);
+        CancellationTokenRegistration registration = _cancellationToken.Register (static state => ((UiDispatchOperation)state!).Cancel (), this);
 
-        if (!IsPending)
+        lock (_registrationLock)
         {
-            _registration.Unregister ();
+            if (IsPending)
+            {
+                _registration = registration;
+
+                return;
+            }
         }
+
+        registration.Unregister ();
     }
 
     internal void SetTimeout (object timeout)
     {
-        Volatile.Write (ref _timeout, timeout);
+        Interlocked.Exchange (ref _timeout, timeout);
 
         if (!IsPending)
         {
@@ -75,16 +83,20 @@ internal sealed class UiDispatchOperation
         finally
         {
             Volatile.Write (ref _state, 2);
-            _registration.Unregister ();
+            UnregisterCancellation ();
             _app.CompleteDispatch (this);
         }
     }
 
-    internal void Cancel ()
+    internal void Cancel () => CancelCore (true);
+
+    internal object? CancelForBulk () => CancelCore (false);
+
+    private object? CancelCore (bool removeTimeout)
     {
         if (Interlocked.CompareExchange (ref _state, 2, 0) != 0)
         {
-            return;
+            return null;
         }
 
         if (_cancellationToken.IsCancellationRequested)
@@ -98,13 +110,15 @@ internal sealed class UiDispatchOperation
 
         object? timeout = Volatile.Read (ref _timeout);
 
-        if (timeout is { })
+        if (removeTimeout && timeout is { })
         {
             _app.TimedEvents.Remove (timeout);
         }
 
-        _registration.Unregister ();
+        UnregisterCancellation ();
         _app.CompleteDispatch (this);
+
+        return timeout;
     }
 
     internal void Fail (Exception exception)
@@ -115,7 +129,20 @@ internal sealed class UiDispatchOperation
         }
 
         _completion.TrySetException (exception);
-        _registration.Unregister ();
+        UnregisterCancellation ();
         _app.CompleteDispatch (this);
+    }
+
+    private void UnregisterCancellation ()
+    {
+        CancellationTokenRegistration registration;
+
+        lock (_registrationLock)
+        {
+            registration = _registration;
+            _registration = default;
+        }
+
+        registration.Unregister ();
     }
 }

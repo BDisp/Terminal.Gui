@@ -9,7 +9,7 @@ Terminal.Gui applications run on a single main thread with an event loop that pr
 Terminal.Gui follows the standard UI toolkit pattern where **all UI operations must happen on the main thread**. Attempting to modify views or their properties from background threads will result in undefined behavior and potential crashes.
 
 ### The Golden Rule
-> Always use `App?.Invoke()` (from within a View) or `app.Invoke()` (with an IApplication instance) to update the UI from background threads.
+> Always use `App?.Invoke()` (from within a View), `app.Invoke()`, or `app.InvokeAsync()` to update the UI from background threads.
 
 ## Background Operations
 
@@ -28,9 +28,9 @@ await Task.Run (async () =>
 });
 ```
 
-`InvokeAsync` completes after the callback runs on the UI thread. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. Catch `OperationCanceledException` when that outcome is expected. Exceptions thrown by the callback fault the returned task; they do not reach the main-loop error handler. A UI-thread call during a running view-backed session executes immediately and returns an already completed or faulted task. To cancel a specific request, pass its `CancellationToken` as the final argument. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
+`InvokeAsync` completes after the callback runs on the UI thread. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. Catch `OperationCanceledException` when that outcome is expected. Exceptions thrown by the callback fault the returned task; they do not reach the main-loop error handler, so await or inspect the task. A UI-thread call during a running session executes immediately and returns an already completed or faulted task. To cancel a specific request, pass its `CancellationToken` as the final argument. Custom `IApplication` implementations can support these extensions by implementing `IApplicationAsyncDispatcher`. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
 
-This dispatch API is provided by Terminal.Gui's application implementation. A custom `IApplication` implementation must provide its own dispatch support.
+Calls accepted before shutdown return tasks that are canceled if still pending. Calls after shutdown begins throw `NotInitializedException`, as `Invoke` does. Dispatches made between two completed sessions are canceled; to queue work for the next session, start that session first. Dispatches queued after `Init` but before the first session wait for that first session.
 
 ### Using async/await (Recommended)
 

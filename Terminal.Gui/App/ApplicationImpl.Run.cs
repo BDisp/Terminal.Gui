@@ -14,8 +14,14 @@ internal partial class ApplicationImpl
     /// <inheritdoc/>
     public ConcurrentStack<SessionToken>? SessionStack { get; } = new ();
 
+    private IRunnable? _topRunnable;
+
     /// <inheritdoc/>
-    public IRunnable? TopRunnable { get; private set; }
+    public IRunnable? TopRunnable
+    {
+        get => Volatile.Read (ref _topRunnable);
+        private set => Volatile.Write (ref _topRunnable, value);
+    }
 
     /// <inheritdoc/>
     public View? TopRunnableView => TopRunnable as View;
@@ -483,6 +489,11 @@ internal partial class ApplicationImpl
             // Update cached state atomically - IsRunning and IsModal are now consistent
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
+
+            if (wasModal)
+            {
+                TopRunnable = previousRunnable;
+            }
         }
 
         // END CRITICAL SECTION - IsRunning/IsModal now thread-safe
@@ -493,11 +504,8 @@ internal partial class ApplicationImpl
             runnable.RaiseIsModalChangedEvent (false);
         }
 
-        TopRunnable = null;
-
         if (previousRunnable != null)
         {
-            TopRunnable = previousRunnable;
             previousRunnable.RaiseIsModalChangedEvent (true);
         }
 
@@ -513,10 +521,10 @@ internal partial class ApplicationImpl
 
         // Clear the Runnable from the token
         token.Runnable = null;
-        CancelOwnedDispatches (token);
         HasEndedSession = true;
+        CancelOwnedDispatches (token);
 
-        if (TopRunnable is null)
+        if (SessionStack?.Any (session => session.Runnable is { IsRunning: true }) != true)
         {
             CancelPendingDispatches (false);
         }
@@ -537,14 +545,22 @@ internal partial class ApplicationImpl
     ///     <see cref="MainLoopSyncContext"/> fall back to the thread pool instead of queueing onto a
     ///     loop that may never pump again.
     /// </summary>
-    internal bool HasEndedSession { get; private set; }
+    private bool _hasEndedSession;
+
+    internal bool HasEndedSession
+    {
+        get => Volatile.Read (ref _hasEndedSession);
+        private set => Volatile.Write (ref _hasEndedSession, value);
+    }
 
     /// <summary>
     ///     INTERNAL: Whether work posted to <see cref="MainLoopSyncContext"/> can rely on the main
     ///     loop to pump it: the app is initialized, and either a session is running or none has run
     ///     to completion yet (posts made between Init and the first Run are pumped by that Run).
     /// </summary>
-    internal bool CanPumpPostedWork => Initialized && (TopRunnable is { IsRunning: true } || !HasEndedSession);
+    internal bool CanPumpPostedWork => Initialized
+                                       && !Volatile.Read (ref _dispatchStopping)
+                                       && (!HasEndedSession || TopRunnable is { IsRunning: true });
 
     internal void ResetHasEndedSession () => HasEndedSession = false;
 

@@ -6,6 +6,9 @@ internal partial class ApplicationImpl
     private readonly HashSet<UiDispatchOperation> _pendingDispatches = [];
     private bool _dispatchStopping;
 
+    Task IApplicationAsyncDispatcher.InvokeAsync (Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken) =>
+        InvokeAsyncCore (action, owner, cancellationToken);
+
     internal Task InvokeAsyncCore (Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull (action);
@@ -29,8 +32,14 @@ internal partial class ApplicationImpl
                 throw new NotInitializedException (nameof (ApplicationDispatchExtensions.InvokeAsync));
             }
 
-            if ((TopRunnable is null && HasEndedSession)
-                || (owner is { } && (owner.Runnable is null || SessionStack?.Contains (owner) != true)))
+            if (owner is { })
+            {
+                if (owner.Runnable is null || SessionStack?.Contains (owner) != true)
+                {
+                    return Task.FromCanceled (new CancellationToken (true));
+                }
+            }
+            else if (HasEndedSession && SessionStack?.Any (session => session.Runnable is { IsRunning: true }) != true)
             {
                 return Task.FromCanceled (new CancellationToken (true));
             }
@@ -45,7 +54,7 @@ internal partial class ApplicationImpl
             return operation.Task;
         }
 
-        if (TopRunnableView is IRunnable { IsRunning: true } && MainThreadId == Thread.CurrentThread.ManagedThreadId)
+        if (TopRunnable is { IsRunning: true } && MainThreadId == Thread.CurrentThread.ManagedThreadId)
         {
             operation.Execute ();
 
@@ -87,10 +96,7 @@ internal partial class ApplicationImpl
             pending = _pendingDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();
         }
 
-        foreach (UiDispatchOperation operation in pending)
-        {
-            operation.Cancel ();
-        }
+        CancelDispatches (pending);
     }
 
     private void CancelPendingDispatches (bool stopDispatching)
@@ -101,15 +107,37 @@ internal partial class ApplicationImpl
         {
             if (stopDispatching)
             {
-                _dispatchStopping = true;
+                Volatile.Write (ref _dispatchStopping, true);
             }
 
             pending = _pendingDispatches.ToArray ();
         }
 
+        CancelDispatches (pending);
+    }
+
+    private void CancelDispatches (UiDispatchOperation [] pending)
+    {
+        List<object> timeouts = [];
+
         foreach (UiDispatchOperation operation in pending)
         {
-            operation.Cancel ();
+            if (operation.CancelForBulk () is { } timeout)
+            {
+                timeouts.Add (timeout);
+            }
+        }
+
+        if (TimedEvents is TimedEvents timedEvents)
+        {
+            timedEvents.RemoveMany (timeouts);
+
+            return;
+        }
+
+        foreach (object timeout in timeouts)
+        {
+            TimedEvents.Remove (timeout);
         }
     }
 }

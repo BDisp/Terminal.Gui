@@ -77,7 +77,7 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
-            _dispatchStopping = false;
+            Volatile.Write (ref _dispatchStopping, false);
             Initialized = true;
         }
 
