@@ -228,11 +228,20 @@ public class AnsiOutput : OutputBase, IOutput
             return;
         }
 
-        Write (Encoding.UTF8.GetBytes (output.ToString ()));
+        WriteUtf8 (Encoding.UTF8.GetBytes (output.ToString ()));
     }
 
     /// <inheritdoc/>
-    protected override void WriteEncodedString (string output) => Write (output.AsSpan ());
+    protected override void WriteEncodedString (string output)
+    {
+        if (HasCustomStringWriter (typeof (AnsiOutput)))
+        {
+            Write (new StringBuilder (output));
+            return;
+        }
+
+        Write (output.AsSpan ());
+    }
 
     /// <inheritdoc/>
     public void Write (ReadOnlySpan<char> text)
@@ -252,25 +261,13 @@ public class AnsiOutput : OutputBase, IOutput
     public override void Write (IOutputBuffer buffer)
     {
         _lastBuffer = buffer;
-        _batchMode = true;
+        // An out-of-band legacy attribute hook must take effect between physical writes.
+        _batchMode = !UsesLegacyAttributeWriter && !HasCustomStringWriter (typeof (AnsiOutput));
         _frameBuffer.Clear ();
 
         try
         {
             base.Write (buffer);
-
-            if (_pendingCursorMoves.Length > 0)
-            {
-                _frameBuffer.Append (_pendingCursorMoves);
-                _pendingCursorMoves.Clear ();
-            }
-
-            _batchMode = false;
-
-            if (_frameBuffer.Length > 0)
-            {
-                Write (_frameBuffer.AsSpan ());
-            }
         }
         finally
         {
@@ -282,6 +279,22 @@ public class AnsiOutput : OutputBase, IOutput
         }
     }
 
+    internal override void FlushFrame ()
+    {
+        if (_pendingCursorMoves.Length > 0)
+        {
+            _frameBuffer.Append (_pendingCursorMoves);
+            _pendingCursorMoves.Clear ();
+        }
+
+        _batchMode = false;
+
+        if (_frameBuffer.Length > 0)
+        {
+            Write (_frameBuffer.AsSpan ());
+        }
+    }
+
     /// <summary>
     ///     PERF: Write pre-encoded UTF-8 bytes directly to the terminal.
     ///     In batch mode, merges deferred cursor moves with cell content into one WriteFile.
@@ -289,18 +302,41 @@ public class AnsiOutput : OutputBase, IOutput
     /// </summary>
     protected override void Write (ReadOnlySpan<byte> output)
     {
+        if (HasCustomStringWriter (typeof (AnsiOutput)))
+        {
+            Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+            return;
+        }
+
+        WriteUtf8 (output);
+    }
+
+    private void WriteUtf8 (ReadOnlySpan<byte> output)
+    {
         try
         {
             if (_batchMode)
             {
+                if (_frameBuffer.Length + (long)_pendingCursorMoves.Length > Utf8Buffer.RetainedCapacityLimit)
+                {
+                    WriteDirect (_frameBuffer.AsSpan ());
+                    _frameBuffer.Clear ();
+                }
+
                 if (_pendingCursorMoves.Length > 0)
                 {
                     _frameBuffer.Append (_pendingCursorMoves);
                     _pendingCursorMoves.Clear ();
                 }
 
-                // Send large images directly after earlier frame content. Staging
-                // them would make the frame buffer retain multi-megabyte capacity.
+                // Bound cumulative staging too: many small images can exceed the limit.
+                if (_frameBuffer.Length > Utf8Buffer.RetainedCapacityLimit - Math.Min (output.Length, Utf8Buffer.RetainedCapacityLimit))
+                {
+                    WriteDirect (_frameBuffer.AsSpan ());
+                    _frameBuffer.Clear ();
+                }
+
+                // Large images bypass staging after all preceding content.
                 if (output.Length > Utf8Buffer.RetainedCapacityLimit)
                 {
                     if (_frameBuffer.Length > 0)
@@ -392,11 +428,6 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override bool SetCursorPositionImpl (int col, int row)
     {
-        if (_currentCursor.Position is { } && _currentCursor.Position.Value.X == col && _currentCursor.Position.Value.Y == row)
-        {
-            return false;
-        }
-
         if (_platform == AnsiPlatform.Degraded)
         {
             return true;

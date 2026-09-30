@@ -114,6 +114,12 @@ public class NetOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override void WriteEncodedString (string output)
     {
+        if (HasCustomStringWriter (typeof (NetOutput)))
+        {
+            Write (new StringBuilder (output));
+            return;
+        }
+
         CaptureText (output.AsSpan ());
 
         if (!IsAttachedToTerminal)
@@ -134,6 +140,12 @@ public class NetOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override void Write (ReadOnlySpan<byte> output)
     {
+        if (HasCustomStringWriter (typeof (NetOutput)))
+        {
+            Write (new StringBuilder (Encoding.UTF8.GetString (output)));
+            return;
+        }
+
         if (output.IsEmpty)
         {
             return;
@@ -214,11 +226,6 @@ public class NetOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override bool SetCursorPositionImpl (int col, int row)
     {
-        if (_currentCursor.Position is { } && _currentCursor.Position.Value.X == col && _currentCursor.Position.Value.Y == row)
-        {
-            return false;
-        }
-
         if (_isWinPlatform)
         {
             try

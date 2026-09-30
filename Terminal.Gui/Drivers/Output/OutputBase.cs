@@ -16,9 +16,18 @@ public abstract class OutputBase
         CaptureOutput = !IsAttachedToTerminal;
         Action<StringBuilder, Attribute, TextStyle> attributeWriter = AppendOrWriteAttribute;
         _usesLegacyAttributeWriter = attributeWriter.Method.DeclaringType != typeof (OutputBase);
+        Action<StringBuilder> stringWriter = Write;
+        _stringWriterType = stringWriter.Method.DeclaringType;
     }
 
     private readonly bool _usesLegacyAttributeWriter;
+    private readonly Type? _stringWriterType;
+
+    /// <summary>Gets whether a derived class overrides a built-in StringBuilder sink.</summary>
+    protected bool HasCustomStringWriter (Type builtInType) => _stringWriterType != builtInType;
+
+    /// <summary>Gets whether a derived output uses the original StringBuilder attribute hook.</summary>
+    protected bool UsesLegacyAttributeWriter => _usesLegacyAttributeWriter;
 
     /// <summary>
     ///     Gets whether this output instance is attached to a real terminal device.
@@ -129,11 +138,86 @@ public abstract class OutputBase
     ///     and finally renders queued sixel images. Cursor visibility is managed by
     ///     <c>ApplicationMainLoop.SetCursor()</c>.
     /// </summary>
+    /// <remarks>
+    ///     To update output from background work, dispatch the update to the application's main loop.
+    ///     Writes and mutations of the buffer must be serialized on that thread. A failed built-in frame
+    ///     write restores consumed dirty flags and invalidates raster state so the buffer can be retried.
+    /// </remarks>
     public virtual void Write (IOutputBuffer buffer)
+    {
+        OutputDirtyState dirtyState = new (buffer, ref _dirtyChanges);
+        _clearLastOutputPending = true;
+        _kittyImagesTouchedThisFrame.Clear ();
+
+        try
+        {
+            if (_recoverOutputState && !IsLegacyConsole)
+            {
+                // A short native write can leave a control string open and terminal state uncertain.
+                WriteEncodedString ("\u001b\\" + EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes);
+                _redrawTextStyle = TextStyle.None;
+
+                foreach (int imageId in _kittyDeletesToRetry)
+                {
+                    DeleteKittyImage (imageId);
+                }
+            }
+
+            WriteFrame (buffer, ref dirtyState);
+            FlushFrame ();
+            _recoverOutputState = false;
+            _kittyDeletesToRetry.Clear ();
+        }
+        catch
+        {
+            dirtyState.Restore ();
+            RecoverRasterState (buffer);
+            _recoverOutputState = true;
+            throw;
+        }
+    }
+
+    // Batched outputs must flush inside the dirty-state transaction.
+    internal virtual void FlushFrame () { }
+
+    private bool _recoverOutputState;
+    private int []? _dirtyChanges;
+    private readonly HashSet<int> _kittyImagesTouchedThisFrame = [];
+    private readonly HashSet<int> _kittyDeletesToRetry = [];
+
+    private void RecoverRasterState (IOutputBuffer buffer)
+    {
+        _kittyDeletesToRetry.UnionWith (_kittyImagesTouchedThisFrame);
+
+        foreach (List<int> imageIds in _placedKittyImageIds.Values)
+        {
+            _kittyDeletesToRetry.UnionWith (imageIds);
+        }
+
+        _kittyDeletesToRetry.UnionWith (_kittyCurrentImageId.Values);
+        _placedKittyImageIds.Clear ();
+        _placedKittyGeometry.Clear ();
+        _kittyTransmittedImage.Clear ();
+        _kittyTransmittedVersion.Clear ();
+        _kittyPlacementIds.Clear ();
+        _kittyCurrentImageId.Clear ();
+
+        foreach (RasterImageCommand command in buffer.GetRasterImages ())
+        {
+            command.IsDirty = true;
+            command.NeedsTransparentCellClear = true;
+        }
+
+        foreach (SixelToRender sixel in GetSixels ())
+        {
+            sixel.IsDirty = true;
+        }
+    }
+
+    private void WriteFrame (IOutputBuffer buffer, ref OutputDirtyState dirtyState)
     {
         using Utf8BufferLease lease = new (this);
         Utf8Buffer outputBuffer = lease.Buffer;
-        _clearLastOutputPending = true;
         var top = 0;
         var left = 0;
         int rows = buffer.Rows;
@@ -149,7 +233,7 @@ public abstract class OutputBase
         if (!IsLegacyConsole && UseKittyGraphics)
         {
             EmitVanishedKittyDeletes (buffer);
-            ClearKittyRasterBlankCells (buffer);
+            ClearKittyRasterBlankCells (buffer, ref dirtyState);
         }
 
         // Raster images must be written before dirty cells so later text draws above them.
@@ -205,7 +289,7 @@ public abstract class OutputBase
                 {
                     if (skipRasterBlank)
                     {
-                        buffer.Contents [row, col].IsDirty = false;
+                        dirtyState.ClearCell (row, col);
                     }
 
                     if (outputWidth > 0)
@@ -255,14 +339,14 @@ public abstract class OutputBase
                 // Append dirty cell as ANSI and mark clean
                 int cellCol = col;
                 Cell cell = buffer.Contents [row, col];
-                buffer.Contents [row, col].IsDirty = false;
+                dirtyState.ClearCell (row, col);
                 AppendCellAnsi (cell, outputBuffer, ref redrawAttr, ref _redrawTextStyle, cols, ref col, ref outputWidth);
 
                 if (col != cellCol)
                 {
                     // Was a wide grapheme so mark clean next cell
                     // See https://github.com/tui-cs/Terminal.Gui/issues/4466
-                    buffer.Contents [row, col].IsDirty = false;
+                    dirtyState.ClearCell (row, col);
                 }
             }
 
@@ -283,7 +367,7 @@ public abstract class OutputBase
 
             // Every dirty cell in this row has now been consumed. Drawing operations will
             // set this flag again when they modify the row in a later frame.
-            buffer.DirtyLines [row] = false;
+            dirtyState.ClearLine (row);
 
             // Flush buffered output for row. Even when nothing remains buffered, an OSC 8 hyperlink
             // may still be open in the terminal because it was started in a prior batch flushed by
@@ -425,13 +509,12 @@ public abstract class OutputBase
     {
         if (_usesLegacyAttributeWriter)
         {
-            StringBuilder legacyAttributeBuffer = new ();
+            // The hook can flush accumulated text before an out-of-band color change.
+            StringBuilder legacyAttributeBuffer = new (Encoding.UTF8.GetString (output.AsSpan ()));
+            output.Clear ();
             AppendOrWriteAttribute (legacyAttributeBuffer, attr, redrawTextStyle);
-
-            foreach (ReadOnlyMemory<char> chunk in legacyAttributeBuffer.GetChunks ())
-            {
-                output.Append (chunk.Span);
-            }
+            // Encode once: StringBuilder chunks can split a UTF-16 surrogate pair.
+            output.Append (legacyAttributeBuffer.ToString ());
 
             return;
         }
@@ -855,7 +938,7 @@ public abstract class OutputBase
 
     }
 
-    private void ClearKittyRasterBlankCells (IOutputBuffer buffer)
+    private void ClearKittyRasterBlankCells (IOutputBuffer buffer, ref OutputDirtyState dirtyState)
     {
         if (buffer.Contents is null)
         {
@@ -887,7 +970,7 @@ public abstract class OutputBase
                         }
 
                         WriteTransparentBlankCell ();
-                        buffer.Contents [row, col].IsDirty = false;
+                        dirtyState.ClearCell (row, col);
                     }
                 }
             }
@@ -1005,7 +1088,7 @@ public abstract class OutputBase
 
             if (_kittyCurrentImageId.TryGetValue (id, out int residentImageId))
             {
-                WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (residentImageId));
+                DeleteKittyImage (residentImageId);
             }
 
             vanishedSourceCrop.Add (id);
@@ -1024,8 +1107,14 @@ public abstract class OutputBase
     {
         foreach (int imageId in imageIds)
         {
-            WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (imageId));
+            DeleteKittyImage (imageId);
         }
+    }
+
+    private void DeleteKittyImage (int imageId)
+    {
+        _kittyImagesTouchedThisFrame.Add (imageId);
+        WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (imageId));
     }
 
     // Derives the Kitty image id for the rectIndex-th visible fragment of a command. Fragment 0 uses
@@ -1091,6 +1180,11 @@ public abstract class OutputBase
 
                 int imageId = trackKitty ? GetKittyImageId (command.Id!, rectIndex) : 0;
                 SetCursorPositionImpl (visibleCells.X, visibleCells.Y);
+                if (trackKitty)
+                {
+                    _kittyImagesTouchedThisFrame.Add (imageId);
+                }
+
                 WriteEncodedString (GetRasterImageData (command, visibleCells, pixels, imageId));
 
                 if (trackKitty)
@@ -1138,6 +1232,7 @@ public abstract class OutputBase
             // Double-buffer: transmit the new pixels to the OTHER image id, so the image currently on
             // screen stays intact while the new one loads; the new placement is then drawn on top below.
             imageId = previousImageId == idA ? idB : idA;
+            _kittyImagesTouchedThisFrame.Add (imageId);
             WriteEncodedString (new KittyGraphicsEncoder ().EncodeTransmit (command.Pixels!, imageId));
             _kittyTransmittedImage [command.Id!] = command.Pixels!;
             _kittyTransmittedVersion [command.Id!] = command.SourceVersion;
@@ -1169,7 +1264,7 @@ public abstract class OutputBase
         // pixels were visible right up to this point, so the swap never blanks.
         if (pixelsChanged && previousImageId != 0 && previousImageId != imageId)
         {
-            WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacements (previousImageId));
+            DeleteKittyImage (previousImageId);
         }
 
         // Fewer fragments than last frame (e.g. a clip hole closed): delete the now-unused placements so
@@ -1180,6 +1275,7 @@ public abstract class OutputBase
             {
                 if (!placementIds.Contains (pid))
                 {
+                    _kittyImagesTouchedThisFrame.Add (imageId);
                     WriteEncodedString (KittyGraphicsEncoder.EncodeDeletePlacement (imageId, pid));
                 }
             }
