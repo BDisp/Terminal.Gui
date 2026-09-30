@@ -13,6 +13,7 @@ public static class ApplicationDispatchExtensions
     ///     for the next main-loop iteration. Exceptions from the action fault the task and do not enter the main-loop
     ///     error handler, except that an <see cref="OperationCanceledException"/> carrying the canceled caller token
     ///     cancels the task. Pending dispatches are canceled when the application is disposed or its final session ends.
+    ///     Queued dispatches are independent of user timers; removing or stopping timers does not discard them.
     ///     Dispatches queued after initialization but before the first session wait for that session to start.
     ///     After the final session ends or disposal begins, a canceled await may resume on a thread-pool thread.
     ///     To observe action failures, await or otherwise inspect the returned task.

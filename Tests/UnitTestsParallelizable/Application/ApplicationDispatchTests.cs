@@ -24,7 +24,7 @@ public class ApplicationDispatchTests
             Assert.False (dispatch.IsCompleted, $"Dispatch status: {dispatch.Status}; main thread: {app.MainThreadId}; test thread: {Thread.CurrentThread.ManagedThreadId}; callback thread: {callbackThreadId}");
             Assert.Null (callbackThreadId);
 
-            app.TimedEvents!.RunTimers ();
+            ((ApplicationImpl)app).Coordinator!.RunIteration ();
 
             Assert.True (dispatch.IsCompletedSuccessfully);
             Assert.Equal (app.MainThreadId, callbackThreadId);
@@ -39,9 +39,44 @@ public class ApplicationDispatchTests
 
     // CoPilot - GPT-6
     [Fact]
-    public void AddedHandlerFailure_DoesNotLeaveDispatchTimeoutQueued ()
+    public void RunLoop_DrainsQueuedDispatchOnUiThread ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        app.StopAfterFirstIteration = true;
+        Task? dispatch = null;
+        int? callbackThreadId = null;
+        EventHandler<SessionTokenEventArgs> handler = (_, args) =>
+        {
+            Thread worker = new (() => dispatch = app.InvokeAsync (args.State, () => callbackThreadId = Thread.CurrentThread.ManagedThreadId));
+            worker.Start ();
+            Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
+        };
+        app.SessionBegun += handler;
+
+        try
+        {
+            app.Run (runnable);
+
+            Assert.NotNull (dispatch);
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.Equal (app.MainThreadId, callbackThreadId);
+        }
+        finally
+        {
+            app.SessionBegun -= handler;
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void ThrowingAddedHandler_DoesNotAffectDispatch ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
         TimedEvents timedEvents = Assert.IsType<TimedEvents> (app.TimedEvents);
         InvalidOperationException failure = new ("Added handler failure.");
         EventHandler<TimeoutEventArgs> handler = (_, _) => throw failure;
@@ -50,16 +85,99 @@ public class ApplicationDispatchTests
         try
         {
             bool ran = false;
-            Task dispatch = app.InvokeAsync (() => ran = true, TestContext.Current.CancellationToken);
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => ran = true));
 
-            Assert.True (dispatch.IsFaulted);
-            Assert.Same (failure, dispatch.Exception!.InnerException);
+            Assert.False (dispatch.IsCompleted);
             Assert.Empty (timedEvents.Timeouts);
-            Assert.False (ran);
+            PumpUiDispatches (app);
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (ran);
         }
         finally
         {
             timedEvents.Added -= handler;
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void WorkerTimerPump_CannotRunQueuedDispatchOffUiThread ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+
+        try
+        {
+            int? callbackThreadId = null;
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => callbackThreadId = Thread.CurrentThread.ManagedThreadId));
+            Thread worker = new (() =>
+            {
+                app.TimedEvents!.RunTimers ();
+                ((ApplicationImpl)app).DrainDispatches ();
+            });
+            worker.Start ();
+            Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
+
+            Assert.False (dispatch.IsCompleted);
+            Assert.Null (callbackThreadId);
+            PumpUiDispatches (app);
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.Equal (app.MainThreadId, callbackThreadId);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void RemovingOrStoppingTimers_DoesNotStrandQueuedDispatch ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+
+        try
+        {
+            bool ran = false;
+            Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => ran = true));
+            bool removedInAdded = false;
+            EventHandler<TimeoutEventArgs> removeOnAdd = (_, args) => removedInAdded = app.TimedEvents!.Remove (args.Timeout);
+            app.TimedEvents!.Added += removeOnAdd;
+
+            try
+            {
+                app.AddTimeout (TimeSpan.FromHours (1), () => false);
+            }
+            finally
+            {
+                app.TimedEvents.Added -= removeOnAdd;
+            }
+
+            Assert.True (removedInAdded);
+            object timeout = app.AddTimeout (TimeSpan.FromHours (1), () => false)!;
+            Assert.True (app.TimedEvents!.Remove (timeout));
+            app.TimedEvents.StopAll ();
+
+            Assert.False (dispatch.IsCompleted);
+            PumpUiDispatches (app);
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (ran);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
             app.Dispose ();
         }
     }
@@ -206,10 +324,11 @@ public class ApplicationDispatchTests
             Assert.False (dispatch.IsCompleted);
 
             cancellation.Cancel ();
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCanceled);
             Assert.False (ran);
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedDispatchCount);
             Assert.Empty (app.TimedEvents!.Timeouts);
         }
         finally
@@ -240,6 +359,7 @@ public class ApplicationDispatchTests
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => ran = true, cancellation.Token));
 
             app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCanceled);
             Assert.False (ran);
@@ -291,7 +411,7 @@ public class ApplicationDispatchTests
             Task outerDispatch = QueueOnWorker (() => app.InvokeAsync (outerToken, () => outerRan = true));
 
             app.End (innerToken);
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (innerDispatch.IsCanceled);
             Assert.False (innerRan);
@@ -372,7 +492,7 @@ public class ApplicationDispatchTests
             Assert.NotNull (dispatch);
             Assert.False (dispatch.IsCompleted);
 
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCompletedSuccessfully);
             Assert.True (ran);
@@ -488,7 +608,7 @@ public class ApplicationDispatchTests
             topProperty.SetValue (app, null);
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (outerToken, () => { }));
             topProperty.SetValue (app, savedTop);
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCompletedSuccessfully);
         }
@@ -561,7 +681,7 @@ public class ApplicationDispatchTests
         {
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (innerToken, () => { }));
             app.End (outerToken);
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCompletedSuccessfully);
             Assert.True (inner.IsRunning);
@@ -645,11 +765,10 @@ public class ApplicationDispatchTests
             producer.Join ();
             Assert.Null (producerFailure);
 
-            app.TimedEvents!.RunTimers ();
-
             Assert.All (dispatches, dispatch => Assert.True (dispatch?.IsCanceled));
             Assert.Equal (0, ran);
-            Assert.Empty (app.TimedEvents.Timeouts);
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedDispatchCount);
+            Assert.Empty (app.TimedEvents!.Timeouts);
         }
         finally
         {
@@ -660,7 +779,7 @@ public class ApplicationDispatchTests
     }
 
     [Fact]
-    public void EndingSession_RemovesManyPendingDispatchesWithoutTouchingOtherTimeouts ()
+    public void EndingSession_CancelsPendingDispatchesWithoutTouchingOtherTimeouts ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Runnable runnable = new ();
@@ -683,6 +802,7 @@ public class ApplicationDispatchTests
             app.End (owner);
 
             Assert.All (dispatches, dispatch => Assert.True (dispatch.IsCanceled));
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedDispatchCount);
             Assert.Single (app.TimedEvents!.Timeouts);
             Assert.True (app.TimedEvents.Remove (unrelated));
         }
@@ -695,22 +815,7 @@ public class ApplicationDispatchTests
     }
 
     [Fact]
-    public void BulkTimeoutRemoval_RemovesAllOccurrencesOfEachToken ()
-    {
-        TimedEvents timedEvents = new ();
-        Terminal.Gui.App.Timeout repeated = new () { Span = TimeSpan.Zero, Callback = () => true };
-        timedEvents.Add (repeated);
-        timedEvents.Add (repeated);
-        object unrelated = timedEvents.Add (TimeSpan.FromHours (1), () => false);
-
-        timedEvents.RemoveMany ([repeated]);
-
-        Assert.Single (timedEvents.Timeouts);
-        Assert.True (timedEvents.Remove (unrelated));
-    }
-
-    [Fact]
-    public void ConcurrentCancellationDuringQueueing_LeavesNoTimeouts ()
+    public void ConcurrentCancellationDuringQueueing_LeavesNoQueuedDispatches ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Runnable runnable = new ();
@@ -753,6 +858,7 @@ public class ApplicationDispatchTests
             canceller.Join ();
 
             Assert.All (dispatches, dispatch => Assert.True (dispatch.IsCanceled));
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedDispatchCount);
             Assert.Empty (app.TimedEvents!.Timeouts);
         }
         finally
@@ -791,7 +897,7 @@ public class ApplicationDispatchTests
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (owner, () => ran = true));
 
             app.End (owner);
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (runnable.IsRunning);
             Assert.True (dispatch.IsCompletedSuccessfully);
@@ -821,7 +927,7 @@ public class ApplicationDispatchTests
             bool ran = false;
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (secondToken, () => ran = true));
 
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCompletedSuccessfully);
             Assert.True (ran);
@@ -859,9 +965,11 @@ public class ApplicationDispatchTests
             bool ran = false;
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => ran = true));
             Assert.False (dispatch.IsCompleted);
+            PumpUiDispatches (app);
+            Assert.False (dispatch.IsCompleted);
 
             SessionToken owner = app.Begin (runnable)!;
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.True (dispatch.IsCompletedSuccessfully);
             Assert.True (ran);
@@ -897,7 +1005,7 @@ public class ApplicationDispatchTests
     }
 
     [Fact]
-    public void CallbackException_FaultsTaskWithoutEscapingTimerPass ()
+    public void CallbackException_FaultsTaskWithoutEscapingDispatchDrain ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Runnable runnable = new ();
@@ -908,7 +1016,7 @@ public class ApplicationDispatchTests
             InvalidOperationException failure = new ("callback failed");
             Task dispatch = QueueOnWorker (() => app.InvokeAsync (() => throw failure));
 
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.Same (failure, Assert.Throws<InvalidOperationException> (() => dispatch.GetAwaiter ().GetResult ()));
         }
@@ -1039,6 +1147,8 @@ public class ApplicationDispatchTests
         Assert.True (dispatch.IsCompletedSuccessfully);
         dispatcher.Verify (instance => instance.InvokeAsync (It.IsAny<Action<IApplication>> (), null, TestContext.Current.CancellationToken), Times.Once);
     }
+
+    private static void PumpUiDispatches (IApplication app) => ((ApplicationImpl)app).DrainDispatches ();
 
     private static Task QueueOnWorker (Func<Task> dispatch)
     {

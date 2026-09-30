@@ -8,7 +8,6 @@ internal sealed class UiDispatchOperation
     private readonly TaskCompletionSource _completion = new (TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock _registrationLock = new ();
     private CancellationTokenRegistration _registration;
-    private object? _timeout;
     private int _state;
 
     internal UiDispatchOperation (ApplicationImpl app, Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken)
@@ -20,6 +19,8 @@ internal sealed class UiDispatchOperation
     }
 
     internal SessionToken? Owner { get; }
+
+    internal LinkedListNode<UiDispatchOperation>? QueueNode { get; set; }
 
     internal Task Task => _completion.Task;
 
@@ -47,16 +48,6 @@ internal sealed class UiDispatchOperation
         }
 
         registration.Unregister ();
-    }
-
-    internal void SetTimeout (object timeout)
-    {
-        Interlocked.Exchange (ref _timeout, timeout);
-
-        if (!IsPending)
-        {
-            _app.TimedEvents.Remove (timeout);
-        }
     }
 
     internal void Execute ()
@@ -89,15 +80,11 @@ internal sealed class UiDispatchOperation
         }
     }
 
-    internal void Cancel () => CancelCore (true);
-
-    internal object? CancelForBulk () => CancelCore (false);
-
-    private object? CancelCore (bool removeTimeout)
+    internal void Cancel ()
     {
         if (Interlocked.CompareExchange (ref _state, 2, 0) != 0)
         {
-            return null;
+            return;
         }
 
         if (_cancellationToken.IsCancellationRequested)
@@ -109,27 +96,6 @@ internal sealed class UiDispatchOperation
             _completion.TrySetCanceled ();
         }
 
-        object? timeout = Volatile.Read (ref _timeout);
-
-        if (removeTimeout && timeout is { })
-        {
-            _app.TimedEvents.Remove (timeout);
-        }
-
-        UnregisterCancellation ();
-        _app.CompleteDispatch (this);
-
-        return timeout;
-    }
-
-    internal void Fail (Exception exception)
-    {
-        if (Interlocked.CompareExchange (ref _state, 2, 0) != 0)
-        {
-            return;
-        }
-
-        _completion.TrySetException (exception);
         UnregisterCancellation ();
         _app.CompleteDispatch (this);
     }

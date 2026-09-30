@@ -3,7 +3,7 @@ namespace Terminal.Gui.App;
 internal partial class ApplicationImpl
 {
     private readonly Lock _dispatchLock = new ();
-    private readonly HashSet<UiDispatchOperation> _pendingDispatches = [];
+    private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
     private bool _dispatchStopping;
 
     Task IApplicationAsyncDispatcher.InvokeAsync (Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken) =>
@@ -45,7 +45,7 @@ internal partial class ApplicationImpl
             }
 
             operation = new (this, action, owner, cancellationToken);
-            _pendingDispatches.Add (operation);
+            operation.QueueNode = _queuedDispatches.AddLast (operation);
         }
 
         operation.RegisterCancellation ();
@@ -62,47 +62,52 @@ internal partial class ApplicationImpl
             return operation.Task;
         }
 
-        Timeout timeout = new ()
-        {
-            Span = TimeSpan.Zero,
-            Callback = () =>
-            {
-                operation.Execute ();
-
-                return false;
-            }
-        };
-
-        try
-        {
-            object timeoutToken = TimedEvents.Add (timeout);
-            operation.SetTimeout (timeoutToken);
-        }
-        catch (Exception ex)
-        {
-            Exception failure = ex;
-
-            try
-            {
-                // Added handlers run after insertion and can throw before Add returns its token.
-                TimedEvents.Remove (timeout);
-            }
-            catch (Exception cleanupEx)
-            {
-                failure = new AggregateException (ex, cleanupEx);
-            }
-
-            operation.Fail (failure);
-        }
-
         return operation.Task;
+    }
+
+    internal int QueuedDispatchCount
+    {
+        get
+        {
+            lock (_dispatchLock)
+            {
+                return _queuedDispatches.Count;
+            }
+        }
+    }
+
+    internal void DrainDispatches ()
+    {
+        if (MainThreadId != Thread.CurrentThread.ManagedThreadId || !HasRunningSession)
+        {
+            return;
+        }
+
+        UiDispatchOperation [] dispatches;
+
+        lock (_dispatchLock)
+        {
+            // Leave queued operations linked until each starts so End can cancel them during a reentrant callback.
+            dispatches = _queuedDispatches.ToArray ();
+        }
+
+        foreach (UiDispatchOperation operation in dispatches)
+        {
+            operation.Execute ();
+        }
     }
 
     internal void CompleteDispatch (UiDispatchOperation operation)
     {
         lock (_dispatchLock)
         {
-            _pendingDispatches.Remove (operation);
+            if (operation.QueueNode is not { } node)
+            {
+                return;
+            }
+
+            _queuedDispatches.Remove (node);
+            operation.QueueNode = null;
         }
     }
 
@@ -110,14 +115,26 @@ internal partial class ApplicationImpl
     {
         lock (_dispatchLock)
         {
-            if (_dispatchStopping
+            if (MainThreadId != Thread.CurrentThread.ManagedThreadId
+                || _dispatchStopping
                 || operation.Owner is { IsDispatchClosed: true } or { Runnable: null }
                 || (operation.Owner is null && HasEndedSession && !HasRunningSession))
             {
                 return false;
             }
 
-            return operation.TryStart ();
+            if (!operation.TryStart ())
+            {
+                return false;
+            }
+
+            if (operation.QueueNode is { } node)
+            {
+                _queuedDispatches.Remove (node);
+                operation.QueueNode = null;
+            }
+
+            return true;
         }
     }
 
@@ -132,11 +149,14 @@ internal partial class ApplicationImpl
             owner.IsDispatchClosed = true;
             HasEndedSession = true;
             pending = HasRunningSession
-                          ? _pendingDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ()
-                          : _pendingDispatches.ToArray ();
+                          ? _queuedDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ()
+                          : _queuedDispatches.ToArray ();
         }
 
-        CancelDispatches (pending);
+        foreach (UiDispatchOperation operation in pending)
+        {
+            operation.Cancel ();
+        }
     }
 
     private void CancelPendingDispatches (bool stopDispatching)
@@ -150,34 +170,12 @@ internal partial class ApplicationImpl
                 Volatile.Write (ref _dispatchStopping, true);
             }
 
-            pending = _pendingDispatches.ToArray ();
+            pending = _queuedDispatches.ToArray ();
         }
-
-        CancelDispatches (pending);
-    }
-
-    private void CancelDispatches (UiDispatchOperation [] pending)
-    {
-        List<object> timeouts = [];
 
         foreach (UiDispatchOperation operation in pending)
         {
-            if (operation.CancelForBulk () is { } timeout)
-            {
-                timeouts.Add (timeout);
-            }
-        }
-
-        if (TimedEvents is TimedEvents timedEvents)
-        {
-            timedEvents.RemoveMany (timeouts);
-
-            return;
-        }
-
-        foreach (object timeout in timeouts)
-        {
-            TimedEvents.Remove (timeout);
+            operation.Cancel ();
         }
     }
 }

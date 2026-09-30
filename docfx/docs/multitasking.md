@@ -39,7 +39,7 @@ catch (OperationCanceledException)
 }
 ```
 
-`InvokeAsync` completes after the callback runs on the UI thread. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. An `OperationCanceledException` carrying the canceled caller token also cancels the task when thrown by a running callback. Other callback exceptions fault the returned task; they do not reach the main-loop error handler, so await or inspect the task. A UI-thread call during a running session executes immediately and returns an already completed, canceled, or faulted task. To cancel a specific request, pass its `CancellationToken` as the final argument. Custom `IApplication` implementations can support these extensions by implementing `IApplicationAsyncDispatcher`. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
+`InvokeAsync` completes after the callback runs on the UI thread. Queued dispatches are independent of user timers, so `TimedEvents.Remove` and `TimedEvents.StopAll` do not discard them. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. An `OperationCanceledException` carrying the canceled caller token also cancels the task when thrown by a running callback. Other callback exceptions fault the returned task; they do not reach the main-loop error handler, so await or inspect the task. A UI-thread call during a running session executes immediately and returns an already completed, canceled, or faulted task. To cancel a specific request, pass its `CancellationToken` as the final argument. Custom `IApplication` implementations can support these extensions by implementing `IApplicationAsyncDispatcher`. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
 
 Calls accepted before shutdown return tasks that are canceled if still pending. After the final session ends or disposal begins, a canceled `await` may resume on a thread-pool thread because the UI loop is no longer pumping. Check cancellation before accessing views after such an await. Calls after shutdown begins throw `NotInitializedException`. Dispatches made between two completed sessions are canceled; to queue work for the next session, start that session first. Dispatches queued after `Init` but before the first session wait for that first session.
 
@@ -174,7 +174,7 @@ public class ClockView : View
 
 - **Always remove timers** when disposing views to prevent memory leaks
 - **Return `true`** from timer callbacks to continue, `false` to stop
-- **Keep timer callbacks fast** - they run on the main thread
+- **Keep timer callbacks fast** - the application loop runs them on the main thread, while direct `RunTimers` calls execute on the calling thread
 - **Use appropriate intervals** - too frequent updates can impact performance
 
 
