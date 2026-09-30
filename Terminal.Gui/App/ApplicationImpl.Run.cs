@@ -524,7 +524,7 @@ internal partial class ApplicationImpl
         HasEndedSession = true;
         CancelOwnedDispatches (token);
 
-        if (SessionStack?.Any (session => session.Runnable is { IsRunning: true }) != true)
+        if (!HasRunningSession)
         {
             CancelPendingDispatches (false);
         }
@@ -540,18 +540,21 @@ internal partial class ApplicationImpl
         }
     }
 
+    private bool _hasEndedSession;
+
     /// <summary>
     ///     INTERNAL: Whether any session has ended. Once true (and no session is running), posts to
     ///     <see cref="MainLoopSyncContext"/> fall back to the thread pool instead of queueing onto a
     ///     loop that may never pump again.
     /// </summary>
-    private bool _hasEndedSession;
-
     internal bool HasEndedSession
     {
         get => Volatile.Read (ref _hasEndedSession);
         private set => Volatile.Write (ref _hasEndedSession, value);
     }
+
+    /// <summary>Whether the session stack contains a running session, including one beneath the top runnable.</summary>
+    internal bool HasRunningSession => SessionStack?.Any (session => session.Runnable is { IsRunning: true }) == true;
 
     /// <summary>
     ///     INTERNAL: Whether work posted to <see cref="MainLoopSyncContext"/> can rely on the main
@@ -560,7 +563,7 @@ internal partial class ApplicationImpl
     /// </summary>
     internal bool CanPumpPostedWork => Initialized
                                        && !Volatile.Read (ref _dispatchStopping)
-                                       && (!HasEndedSession || TopRunnable is { IsRunning: true });
+                                       && (!HasEndedSession || HasRunningSession);
 
     internal void ResetHasEndedSession () => HasEndedSession = false;
 

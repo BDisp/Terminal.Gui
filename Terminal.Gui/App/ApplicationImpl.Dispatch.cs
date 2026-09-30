@@ -39,7 +39,7 @@ internal partial class ApplicationImpl
                     return Task.FromCanceled (new CancellationToken (true));
                 }
             }
-            else if (HasEndedSession && SessionStack?.Any (session => session.Runnable is { IsRunning: true }) != true)
+            else if (HasEndedSession && !HasRunningSession)
             {
                 return Task.FromCanceled (new CancellationToken (true));
             }

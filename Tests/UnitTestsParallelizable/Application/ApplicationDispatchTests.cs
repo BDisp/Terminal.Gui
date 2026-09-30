@@ -6,7 +6,7 @@ using Moq;
 
 namespace ApplicationTests;
 
-[Collection ("Application Dispatch Tests")]
+[Collection ("Application Tests")]
 public class ApplicationDispatchTests
 {
     [Fact]
@@ -332,6 +332,52 @@ public class ApplicationDispatchTests
             app.TimedEvents!.RunTimers ();
 
             Assert.True (dispatch.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            topProperty.SetValue (app, savedTop);
+            app.End (outerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    [Fact]
+    public void StoppedCachedTop_DoesNotMoveOuterContinuationOffUiThread ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable first = new ();
+        app.End (app.Begin (first)!);
+        first.Dispose ();
+
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        SessionToken innerToken = app.Begin (inner)!;
+        app.End (innerToken);
+        ApplicationImpl impl = (ApplicationImpl)app;
+        PropertyInfo topProperty = typeof (ApplicationImpl).GetProperty (nameof (ApplicationImpl.TopRunnable))!;
+        IRunnable? savedTop = app.TopRunnable;
+
+        try
+        {
+            // Model the moment End has stopped the inner runnable but the cached top still points to it.
+            topProperty.SetValue (app, inner);
+            Assert.True (impl.HasRunningSession);
+            Assert.True (impl.CanPumpPostedWork);
+
+            int? callbackThreadId = null;
+            Thread worker = new (() => impl.SynchronizationContext!.Post (
+                                                                       _ => callbackThreadId = Thread.CurrentThread.ManagedThreadId,
+                                                                       null));
+            worker.Start ();
+            worker.Join ();
+
+            Assert.Null (callbackThreadId);
+            app.TimedEvents!.RunTimers ();
+
+            Assert.Equal (app.MainThreadId, callbackThreadId);
         }
         finally
         {
