@@ -506,38 +506,44 @@ internal partial class ApplicationImpl
 
         EndSessionDispatches (token);
 
-        // Fire events AFTER lock released
-        if (wasModal)
+        // IsDispatchClosed now makes End a no-op, so finish teardown even if a state-change handler throws.
+        try
         {
-            runnable.RaiseIsModalChangedEvent (false);
+            // Fire events AFTER lock released
+            if (wasModal)
+            {
+                runnable.RaiseIsModalChangedEvent (false);
+            }
+
+            if (previousRunnable != null)
+            {
+                previousRunnable.RaiseIsModalChangedEvent (true);
+            }
+
+            Mouse.UngrabMouse ();
+
+            runnable.RaiseIsRunningChangedEvent (false);
         }
-
-        if (previousRunnable != null)
+        finally
         {
-            previousRunnable.RaiseIsModalChangedEvent (true);
-        }
+            token.Result = runnable.Result;
 
-        Mouse.UngrabMouse ();
+            _result = token.Result;
 
-        runnable.RaiseIsRunningChangedEvent (false);
+            Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
 
-        token.Result = runnable.Result;
+            // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
+            token.Runnable = null;
 
-        _result = token.Result;
+            // Restore the ambient context the caller had at Begin, so an await after a directly-begun
+            // session cannot capture a context that is no longer pumping (#5636). For nested sessions
+            // the previous context is the same app context, so the outermost End restores the caller's.
+            if (System.Threading.SynchronizationContext.Current == SynchronizationContext)
+            {
+                System.Threading.SynchronizationContext.SetSynchronizationContext (token.PreviousSynchronizationContext);
+            }
 
-        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
-
-        // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
-        token.Runnable = null;
-
-        SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
-
-        // Restore the ambient context the caller had at Begin, so an await after a directly-begun
-        // session cannot capture a context that is no longer pumping (#5636). For nested sessions
-        // the previous context is the same app context, so the outermost End restores the caller's.
-        if (System.Threading.SynchronizationContext.Current == SynchronizationContext)
-        {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (token.PreviousSynchronizationContext);
+            SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
         }
     }
 

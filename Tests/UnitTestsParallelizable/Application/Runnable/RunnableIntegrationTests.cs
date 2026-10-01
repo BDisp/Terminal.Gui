@@ -207,6 +207,39 @@ public class ApplicationRunnableIntegrationTests
         Assert.Null (token!.Runnable);
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_WhenStateChangedHandlerThrows_CompletesSessionTeardown ()
+    {
+        SynchronizationContext? originalContext = SynchronizationContext.Current;
+        IApplication app = CreateAndInitApp ();
+        Runnable<int> runnable = new ();
+        SessionToken token = app.Begin (runnable)!;
+        SessionToken? endedToken = null;
+        app.SessionEnded += OnSessionEnded;
+        runnable.IsRunningChanged += (_, _) => throw new InvalidOperationException ("handler failed");
+
+        try
+        {
+            Assert.Throws<InvalidOperationException> (() => app.End (token));
+
+            Assert.Null (token.Runnable);
+            Assert.Same (token, endedToken);
+            Assert.Empty (app.SessionStack!);
+            Assert.Same (originalContext, SynchronizationContext.Current);
+
+            app.End (token);
+        }
+        finally
+        {
+            app.SessionEnded -= OnSessionEnded;
+            SynchronizationContext.SetSynchronizationContext (originalContext);
+            app.Dispose ();
+        }
+
+        void OnSessionEnded (object? sender, SessionTokenEventArgs e) => endedToken = e.State;
+    }
+
     [Fact]
     public void End_RaisesIsRunningChangedEvent ()
     {
