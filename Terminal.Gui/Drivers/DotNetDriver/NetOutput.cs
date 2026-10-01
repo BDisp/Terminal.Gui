@@ -188,7 +188,8 @@ public class NetOutput : OutputBase, IOutput
         }
         catch (IOException ex)
         {
-            Logging.Error ($"Error updating .NET console cursor: {ex.Message}");
+            // Best effort: a broken sink also fails the next frame, which DriverImpl logs once.
+            Logging.Debug ($"Error updating .NET console cursor: {ex.Message}");
         }
     }
 

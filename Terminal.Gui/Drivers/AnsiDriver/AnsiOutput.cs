@@ -362,10 +362,11 @@ public class AnsiOutput : OutputBase, IOutput
 
             WriteDirect (output);
         }
-        catch (IOException ex)
+        catch (IOException)
         {
-            Logging.Error ($"Error writing ANSI output: {ex.Message}");
+            // DriverImpl owns failure logging and retry; only drop moves that no longer apply.
             _pendingCursorMoves.Clear ();
+
             throw;
         }
     }
@@ -425,7 +426,8 @@ public class AnsiOutput : OutputBase, IOutput
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
         {
-            Logging.Error ($"Error updating ANSI cursor: {ex.Message}");
+            // Best effort: a broken sink also fails the next frame, which DriverImpl logs once.
+            Logging.Debug ($"Error updating ANSI cursor: {ex.Message}");
         }
     }
 
