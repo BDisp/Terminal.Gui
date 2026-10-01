@@ -375,6 +375,10 @@ public class TimedEventsTests
     {
         IApplication app = Application.Create ();
         app.Init (DriverRegistry.Names.ANSI);
+
+        // Posted work runs on the UI loop of a running session, not on whichever thread pumps timers.
+        using Runnable runnable = new ();
+        app.Begin (runnable);
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         SynchronizationContext context = new MainLoopSyncContext (app);
         using ManualResetEventSlim postStarted = new ();
@@ -422,7 +426,7 @@ public class TimedEventsTests
 
             if (postCompleted.Wait (TimeSpan.FromSeconds (5), cancellationToken))
             {
-                app.TimedEvents.RunTimers ();
+                ((ApplicationImpl)app).DrainDispatches ();
             }
         }
         finally
@@ -445,10 +449,13 @@ public class TimedEventsTests
     {
         IApplication app = Application.Create ();
         app.Init (DriverRegistry.Names.ANSI);
+
+        // Sent work runs on the UI loop of a running session, not on whichever thread pumps timers.
+        using Runnable runnable = new ();
+        app.Begin (runnable);
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         SynchronizationContext context = new MainLoopSyncContext (app);
         using ManualResetEventSlim sendStarted = new ();
-        using ManualResetEventSlim sendQueued = new ();
         using ManualResetEventSlim sendReturned = new ();
         Task? sendTask = null;
         Exception? sendError = null;
@@ -457,7 +464,6 @@ public class TimedEventsTests
         var sendQueuedAfterCallbackCompleted = false;
         var sendReturnedAfterCallback = false;
         var sent = false;
-        EventHandler<TimeoutEventArgs> handler = (_, _) => sendQueued.Set ();
 
         app.AddTimeout (
                         TimeSpan.Zero,
@@ -483,23 +489,19 @@ public class TimedEventsTests
                             sendStartedBeforeCallbackCompleted = sendStarted.Wait (
                                                                                    TimeSpan.FromSeconds (5),
                                                                                    cancellationToken);
-                            sendQueuedBeforeCallbackCompleted = sendQueued.Wait (
-                                                                                 TimeSpan.FromSeconds (5),
-                                                                                 cancellationToken);
+                            sendQueuedBeforeCallbackCompleted = WaitForSendQueued ();
 
                             return false;
                         });
 
-        app.TimedEvents!.Added += handler;
-
         try
         {
-            app.TimedEvents.RunTimers ();
-            sendQueuedAfterCallbackCompleted = sendQueued.Wait (TimeSpan.FromSeconds (5), cancellationToken);
+            app.TimedEvents!.RunTimers ();
+            sendQueuedAfterCallbackCompleted = WaitForSendQueued ();
 
             if (sendQueuedAfterCallbackCompleted && !sendReturned.IsSet)
             {
-                app.TimedEvents.RunTimers ();
+                ((ApplicationImpl)app).DrainDispatches ();
             }
 
             sendReturnedAfterCallback = sendReturned.Wait (TimeSpan.FromSeconds (5), cancellationToken);
@@ -508,16 +510,15 @@ public class TimedEventsTests
         {
             if (sendTask is not null && !sendReturned.IsSet)
             {
-                sendQueuedAfterCallbackCompleted = WaitForCleanup (sendQueued);
+                sendQueuedAfterCallbackCompleted = WaitForSendQueued ();
 
                 if (sendQueuedAfterCallbackCompleted)
                 {
-                    app.TimedEvents.RunTimers ();
+                    ((ApplicationImpl)app).DrainDispatches ();
                     sendReturnedAfterCallback = WaitForCleanup (sendReturned);
                 }
             }
 
-            app.TimedEvents.Added -= handler;
             app.Dispose ();
 
             if (sendTask is not null)
@@ -531,8 +532,10 @@ public class TimedEventsTests
         Assert.True (sendStartedBeforeCallbackCompleted, "The Send task should start before the callback returns.");
         Assert.True (sendQueuedBeforeCallbackCompleted, "Send should enqueue before the callback returns.");
         Assert.True (sendQueuedAfterCallbackCompleted, "Send should enqueue before cleanup times out.");
-        Assert.True (sendReturnedAfterCallback, "Send should return after its callback runs on the timer runner.");
+        Assert.True (sendReturnedAfterCallback, "Send should return after its callback runs on the UI loop.");
         Assert.True (sent);
+
+        bool WaitForSendQueued () => SpinWait.SpinUntil (() => ((ApplicationImpl)app).QueuedPostCount > 0 || sendReturned.IsSet, TimeSpan.FromSeconds (5));
     }
 
     // CoPilot - GPT-5

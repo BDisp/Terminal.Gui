@@ -138,6 +138,51 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void WorkerTimerPump_CannotRunPostedCallbackOffUiThread ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+        Runnable runnable = new ();
+        SessionToken? owner = null;
+
+        try
+        {
+            int? callbackThreadId = null;
+
+            // Post before the first session, then pump timers from a worker before and after the session begins.
+            RunOnWorker (() =>
+                         {
+                             context.Post (_ => callbackThreadId = Thread.CurrentThread.ManagedThreadId, null);
+                             app.TimedEvents!.RunTimers ();
+                         });
+            Assert.Null (callbackThreadId);
+
+            owner = app.Begin (runnable)!;
+            RunOnWorker (() =>
+                         {
+                             app.TimedEvents!.RunTimers ();
+                             ((ApplicationImpl)app).DrainDispatches ();
+                         });
+            Assert.Null (callbackThreadId);
+
+            PumpUiDispatches (app);
+
+            Assert.Equal (app.MainThreadId, callbackThreadId);
+        }
+        finally
+        {
+            if (owner is { })
+            {
+                app.End (owner);
+            }
+
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
     // CoPilot - GPT-6
     [Fact]
     public void RemovingOrStoppingTimers_DoesNotStrandQueuedDispatch ()
@@ -665,15 +710,13 @@ public class ApplicationDispatchTests
             int runs = 0;
             Thread sender = new (() => context.Send (_ => Interlocked.Increment (ref runs), null)) { IsBackground = true };
             sender.Start ();
-            Assert.True (SpinWait.SpinUntil (() => app.TimedEvents!.Timeouts.Count > 0, TimeSpan.FromSeconds (5)));
+            Assert.True (SpinWait.SpinUntil (() => ((ApplicationImpl)app).QueuedPostCount > 0, TimeSpan.FromSeconds (5)));
 
             app.End (owner);
 
             Assert.True (sender.Join (TimeSpan.FromSeconds (5)));
-
-            // The stale main-loop timer must not run the callback a second time.
-            app.TimedEvents!.RunTimers ();
             Assert.Equal (1, runs);
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedPostCount);
         }
         finally
         {
@@ -745,7 +788,7 @@ public class ApplicationDispatchTests
             worker.Join ();
 
             Assert.Null (callbackThreadId);
-            app.TimedEvents!.RunTimers ();
+            PumpUiDispatches (app);
 
             Assert.Equal (app.MainThreadId, callbackThreadId);
         }

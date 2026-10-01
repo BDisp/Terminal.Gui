@@ -75,6 +75,17 @@ internal partial class ApplicationImpl
         }
     }
 
+    internal int QueuedPostCount
+    {
+        get
+        {
+            lock (_dispatchLock)
+            {
+                return _postedCallbacks.Count;
+            }
+        }
+    }
+
     internal void DrainDispatches ()
     {
         if (MainThreadId != Thread.CurrentThread.ManagedThreadId || !HasRunningSession)
@@ -82,12 +93,20 @@ internal partial class ApplicationImpl
             return;
         }
 
+        int postedCount;
         UiDispatchOperation [] dispatches;
 
         lock (_dispatchLock)
         {
             // Leave queued operations linked until each starts so End can cancel them during a reentrant callback.
+            postedCount = _postedCallbacks.Count;
             dispatches = _queuedDispatches.ToArray ();
+        }
+
+        // Run only the posts present at the start of this pass, so a callback that posts again cannot starve the loop.
+        for (var i = 0; i < postedCount && TryTakePostedCallback (out PostedCallback posted); i++)
+        {
+            posted.Callback (posted.State);
         }
 
         foreach (UiDispatchOperation operation in dispatches)
@@ -192,60 +211,54 @@ internal partial class ApplicationImpl
     }
 
     /// <summary>
-    ///     INTERNAL: Runs <see cref="MainLoopSyncContext"/> work on the main loop. Work posted while the loop can pump
-    ///     is tracked until it runs; if the loop stops first, it moves to the thread pool so awaiters are not
-    ///     stranded (#5636).
+    ///     INTERNAL: Runs <see cref="MainLoopSyncContext"/> work on the UI thread. Work posted while the loop can pump
+    ///     waits for <see cref="DrainDispatches"/>; if the loop stops first, it moves to the thread pool so awaiters are
+    ///     not stranded (#5636).
     /// </summary>
     internal void PostToMainLoop (SendOrPostCallback callback, object? state)
     {
-        LinkedListNode<PostedCallback>? posted = null;
+        bool canPump;
 
         lock (_dispatchLock)
         {
-            if (CanPumpPostedWork)
+            canPump = CanPumpPostedWork;
+
+            if (canPump && (MainThreadId != Thread.CurrentThread.ManagedThreadId || TopRunnableView is not IRunnable { IsRunning: true }))
             {
-                posted = _postedCallbacks.AddLast (new PostedCallback (callback, state));
+                _postedCallbacks.AddLast (new PostedCallback (callback, state));
+
+                return;
             }
         }
 
-        if (posted is null)
+        // Like Invoke: run inline on the running UI thread.
+        if (canPump)
         {
-            RunOnThreadPool (callback, state);
+            callback (state);
 
             return;
         }
 
-        // Like Invoke: run inline on the running UI thread; otherwise queue for the main loop.
-        if (TopRunnableView is IRunnable { IsRunning: true } && MainThreadId == Thread.CurrentThread.ManagedThreadId)
-        {
-            RunPosted (posted);
-
-            return;
-        }
-
-        TimedEvents.Add (TimeSpan.Zero,
-                         () =>
-                         {
-                             RunPosted (posted);
-
-                             return false;
-                         });
+        RunOnThreadPool (callback, state);
     }
 
-    private void RunPosted (LinkedListNode<PostedCallback> posted)
+    private bool TryTakePostedCallback (out PostedCallback posted)
     {
         lock (_dispatchLock)
         {
-            // A cleared node already moved to the thread pool when the loop stopped.
-            if (posted.List is null)
+            // Teardown may have moved the remaining posts to the thread pool during an earlier callback.
+            if (_postedCallbacks.First is not { } first)
             {
-                return;
+                posted = default;
+
+                return false;
             }
 
-            _postedCallbacks.Remove (posted);
-        }
+            _postedCallbacks.RemoveFirst ();
+            posted = first.Value;
 
-        posted.Value.Callback (posted.Value.State);
+            return true;
+        }
     }
 
     // Caller must hold _dispatchLock.
