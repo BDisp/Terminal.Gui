@@ -55,11 +55,9 @@ internal partial class ApplicationImpl
             return operation.Task;
         }
 
-        if (TopRunnable is { IsRunning: true } && MainThreadId == Thread.CurrentThread.ManagedThreadId)
+        if (MainThreadId == Thread.CurrentThread.ManagedThreadId && HasRunningSession)
         {
             operation.Execute ();
-
-            return operation.Task;
         }
 
         return operation.Task;
@@ -145,7 +143,7 @@ internal partial class ApplicationImpl
         lock (_dispatchLock)
         {
             // Close the owner to dispatch before lifecycle events; keep Runnable available to their handlers.
-            // Non-top ended tokens can remain in SessionStack.
+            // Non-top ended tokens remain in SessionStack until the sessions above them end.
             owner.IsDispatchClosed = true;
             HasEndedSession = true;
             pending = HasRunningSession
@@ -159,17 +157,13 @@ internal partial class ApplicationImpl
         }
     }
 
-    private void CancelPendingDispatches (bool stopDispatching)
+    private void StopDispatching ()
     {
         UiDispatchOperation [] pending;
 
         lock (_dispatchLock)
         {
-            if (stopDispatching)
-            {
-                Volatile.Write (ref _dispatchStopping, true);
-            }
-
+            Volatile.Write (ref _dispatchStopping, true);
             pending = _queuedDispatches.ToArray ();
         }
 

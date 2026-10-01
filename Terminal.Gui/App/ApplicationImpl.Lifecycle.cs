@@ -164,7 +164,7 @@ internal partial class ApplicationImpl
     {
         // Publish shutdown and cancel pending dispatches before stopping the loop. Canceled awaiters
         // can then resume without posting their continuations to a loop that will no longer pump.
-        CancelPendingDispatches (true);
+        StopDispatching ();
 
         // Stop the coordinator if running
         Coordinator?.Stop ();
@@ -235,7 +235,7 @@ internal partial class ApplicationImpl
 
         Trace.Lifecycle (MainThreadId?.ToString (), "Shutdown");
 
-        CancelPendingDispatches (true);
+        StopDispatching ();
 
         // === 0. Stop all timers ===
         TimedEvents.StopAll ();

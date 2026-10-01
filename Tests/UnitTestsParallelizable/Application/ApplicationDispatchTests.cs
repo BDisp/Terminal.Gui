@@ -215,11 +215,10 @@ public class ApplicationDispatchTests
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Mock<IRunnable> runnable = new ();
         runnable.SetupGet (instance => instance.IsRunning).Returns (true);
-        PropertyInfo topProperty = typeof (ApplicationImpl).GetProperty (nameof (ApplicationImpl.TopRunnable))!;
+        app.SessionStack!.Push (new SessionToken (runnable.Object));
 
         try
         {
-            topProperty.SetValue (app, runnable.Object);
             bool ran = false;
 
             Task dispatch = app.InvokeAsync (() => ran = true, TestContext.Current.CancellationToken);
@@ -229,7 +228,7 @@ public class ApplicationDispatchTests
         }
         finally
         {
-            topProperty.SetValue (app, null);
+            app.SessionStack.Clear ();
             app.Dispose ();
         }
     }

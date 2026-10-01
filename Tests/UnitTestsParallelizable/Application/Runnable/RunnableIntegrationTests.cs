@@ -393,6 +393,32 @@ public class ApplicationRunnableIntegrationTests
         app.End (token1);
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void NestedEnd_AfterNonTopSessionEnds_RestoresNearestRunningSession ()
+    {
+        IApplication app = CreateAndInitApp ();
+        Runnable<int> runnableA = new () { Id = "A" };
+        Runnable<int> runnableB = new () { Id = "B" };
+        Runnable<int> runnableC = new () { Id = "C" };
+        SessionToken tokenA = app.Begin (runnableA)!;
+        SessionToken tokenB = app.Begin (runnableB)!;
+        SessionToken tokenC = app.Begin (runnableC)!;
+
+        app.End (tokenB);
+        app.End (tokenC);
+
+        Assert.Same (runnableA, app.TopRunnable);
+        Assert.True (runnableA.IsModal);
+        Assert.True (runnableA.IsRunning);
+        Assert.Single (app.SessionStack!);
+
+        app.End (tokenA);
+
+        Assert.Null (app.TopRunnable);
+        Assert.Empty (app.SessionStack!);
+    }
+
     [Fact]
     public void RequestStop_WithIRunnable_WorksCorrectly ()
     {

@@ -476,6 +476,12 @@ internal partial class ApplicationImpl
             // Pop token from SessionStack
             if (wasModal && SessionStack?.TryPop (out SessionToken? popped) == true && popped == token)
             {
+                // Discard sessions that ended while beneath this one so the nearest running session becomes top.
+                while (SessionStack?.TryPeek (out SessionToken? endedToken) == true && endedToken.Runnable is not { IsRunning: true })
+                {
+                    SessionStack.TryPop (out _);
+                }
+
                 // Restore previous top runnable
                 if (SessionStack?.TryPeek (out SessionToken? previousToken) == true && previousToken.Runnable is { })
                 {
