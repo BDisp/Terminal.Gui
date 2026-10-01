@@ -590,6 +590,98 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public async Task CallerCancellationBeforeFinalSessionEndOrDispose_ResumesUiAwaiter (bool dispose)
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        using CancellationTokenSource cts = new ();
+        Task dispatch;
+        Task awaiter;
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (((ApplicationImpl)app).SynchronizationContext);
+            dispatch = QueueOnWorker (() => app.InvokeAsync (() => { }, cts.Token));
+            awaiter = AwaitOnUiContext (dispatch);
+
+            // The canceled task posts its UI-context continuation to the loop that is about to stop.
+            RunOnWorker (cts.Cancel);
+
+            if (dispose)
+            {
+                app.Dispose ();
+            }
+            else
+            {
+                app.End (owner);
+            }
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+
+        try
+        {
+            await awaiter.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken);
+            Assert.True (dispatch.IsCanceled);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+
+        static async Task AwaitOnUiContext (Task dispatch)
+        {
+            try
+            {
+                await dispatch;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: the caller canceled before the UI action started.
+            }
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void WorkerSendBeforeFinalSessionEnd_DoesNotBlockForever ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+
+        try
+        {
+            int runs = 0;
+            Thread sender = new (() => context.Send (_ => Interlocked.Increment (ref runs), null)) { IsBackground = true };
+            sender.Start ();
+            Assert.True (SpinWait.SpinUntil (() => app.TimedEvents!.Timeouts.Count > 0, TimeSpan.FromSeconds (5)));
+
+            app.End (owner);
+
+            Assert.True (sender.Join (TimeSpan.FromSeconds (5)));
+
+            // The stale main-loop timer must not run the callback a second time.
+            app.TimedEvents!.RunTimers ();
+            Assert.Equal (1, runs);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
     [Fact]
     public void OuterOwnedDispatch_RemainsValidWithNoCachedTopRunnable ()
     {
@@ -1148,6 +1240,13 @@ public class ApplicationDispatchTests
     }
 
     private static void PumpUiDispatches (IApplication app) => ((ApplicationImpl)app).DrainDispatches ();
+
+    private static void RunOnWorker (Action action)
+    {
+        Thread worker = new (() => action ());
+        worker.Start ();
+        worker.Join ();
+    }
 
     private static Task QueueOnWorker (Func<Task> dispatch)
     {

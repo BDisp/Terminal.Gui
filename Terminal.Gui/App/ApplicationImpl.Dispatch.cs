@@ -4,6 +4,7 @@ internal partial class ApplicationImpl
 {
     private readonly Lock _dispatchLock = new ();
     private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
+    private readonly LinkedList<PostedCallback> _postedCallbacks = new ();
     private bool _dispatchStopping;
 
     Task IApplicationAsyncDispatcher.InvokeAsync (Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken) =>
@@ -139,6 +140,7 @@ internal partial class ApplicationImpl
     private void EndSessionDispatches (SessionToken owner)
     {
         UiDispatchOperation [] pending;
+        PostedCallback [] posted = [];
 
         lock (_dispatchLock)
         {
@@ -146,30 +148,117 @@ internal partial class ApplicationImpl
             // Non-top ended tokens remain in SessionStack until the sessions above them end.
             owner.IsDispatchClosed = true;
             HasEndedSession = true;
-            pending = HasRunningSession
-                          ? _queuedDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ()
-                          : _queuedDispatches.ToArray ();
+
+            if (HasRunningSession)
+            {
+                pending = _queuedDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();
+            }
+            else
+            {
+                pending = [.. _queuedDispatches];
+                posted = TakePostedCallbacks ();
+            }
         }
 
-        foreach (UiDispatchOperation operation in pending)
-        {
-            operation.Cancel ();
-        }
+        CancelAndRelease (pending, posted);
     }
 
     private void StopDispatching ()
     {
         UiDispatchOperation [] pending;
+        PostedCallback [] posted;
 
         lock (_dispatchLock)
         {
             Volatile.Write (ref _dispatchStopping, true);
-            pending = _queuedDispatches.ToArray ();
+            pending = [.. _queuedDispatches];
+            posted = TakePostedCallbacks ();
         }
 
+        CancelAndRelease (pending, posted);
+    }
+
+    private static void CancelAndRelease (UiDispatchOperation [] pending, PostedCallback [] posted)
+    {
         foreach (UiDispatchOperation operation in pending)
         {
             operation.Cancel ();
         }
+
+        foreach (PostedCallback callback in posted)
+        {
+            RunOnThreadPool (callback.Callback, callback.State);
+        }
     }
+
+    /// <summary>
+    ///     INTERNAL: Runs <see cref="MainLoopSyncContext"/> work on the main loop. Work posted while the loop can pump
+    ///     is tracked until it runs; if the loop stops first, it moves to the thread pool so awaiters are not
+    ///     stranded (#5636).
+    /// </summary>
+    internal void PostToMainLoop (SendOrPostCallback callback, object? state)
+    {
+        LinkedListNode<PostedCallback>? posted = null;
+
+        lock (_dispatchLock)
+        {
+            if (CanPumpPostedWork)
+            {
+                posted = _postedCallbacks.AddLast (new PostedCallback (callback, state));
+            }
+        }
+
+        if (posted is null)
+        {
+            RunOnThreadPool (callback, state);
+
+            return;
+        }
+
+        // Like Invoke: run inline on the running UI thread; otherwise queue for the main loop.
+        if (TopRunnableView is IRunnable { IsRunning: true } && MainThreadId == Thread.CurrentThread.ManagedThreadId)
+        {
+            RunPosted (posted);
+
+            return;
+        }
+
+        TimedEvents.Add (TimeSpan.Zero,
+                         () =>
+                         {
+                             RunPosted (posted);
+
+                             return false;
+                         });
+    }
+
+    private void RunPosted (LinkedListNode<PostedCallback> posted)
+    {
+        lock (_dispatchLock)
+        {
+            // A cleared node already moved to the thread pool when the loop stopped.
+            if (posted.List is null)
+            {
+                return;
+            }
+
+            _postedCallbacks.Remove (posted);
+        }
+
+        posted.Value.Callback (posted.Value.State);
+    }
+
+    // Caller must hold _dispatchLock.
+    private PostedCallback [] TakePostedCallbacks ()
+    {
+        PostedCallback [] posted = [.. _postedCallbacks];
+        _postedCallbacks.Clear ();
+
+        return posted;
+    }
+
+    internal static void RunOnThreadPool (SendOrPostCallback callback, object? state) =>
+        ThreadPool.QueueUserWorkItem (static posted => posted.Callback (posted.State), new PostedCallback (callback, state), false);
+
+    private readonly record struct PostedCallback (SendOrPostCallback Callback, object? State);
 }
