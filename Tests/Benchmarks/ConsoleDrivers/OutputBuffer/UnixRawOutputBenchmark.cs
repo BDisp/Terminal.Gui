@@ -16,7 +16,7 @@ public class UnixRawOutputBenchmark
     private long _bytes;
     private int _writes;
 
-    /// <summary>Builds and warms the two rendered frame sizes.</summary>
+    /// <summary>Builds and warms the small (80×25), large (240×70), and per-cell colored (400×110) frames.</summary>
     [GlobalSetup]
     public void Setup ()
     {

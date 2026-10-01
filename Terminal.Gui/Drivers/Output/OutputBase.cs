@@ -24,6 +24,7 @@ public abstract class OutputBase
     }
 
     private readonly bool _usesLegacyAttributeWriter;
+    private StringBuilder? _legacyAttributeText;
     private readonly Type? _stringWriterType;
 
     /// <summary>Gets whether a derived StringBuilder sink needs forwarding outside the current compatibility call.</summary>
@@ -472,6 +473,10 @@ public abstract class OutputBase
     ///         background color is used via ANSI reset sequences (CSI 39m / CSI 49m), allowing native terminal
     ///         transparency to show through.
     ///     </para>
+    ///     <para>
+    ///         When writing a frame, text buffered before the attribute change has already been written, so
+    ///         <paramref name="output"/> is empty on entry.
+    ///     </para>
     /// </summary>
     /// <param name="output"></param>
     /// <param name="attr"></param>
@@ -513,12 +518,23 @@ public abstract class OutputBase
     {
         if (_usesLegacyAttributeWriter)
         {
-            // The hook can flush accumulated text before an out-of-band color change.
-            StringBuilder legacyAttributeBuffer = new (Encoding.UTF8.GetString (output.AsSpan ()));
-            output.Clear ();
-            AppendOrWriteAttribute (legacyAttributeBuffer, attr, redrawTextStyle);
+            // Flush pending text first (as the built-in Win32 hook does) so an out-of-band color
+            // change stays ordered without re-decoding the whole pending row on every attribute.
+            if (output.Length > 0)
+            {
+                Write (output.AsSpan ());
+                output.Clear ();
+            }
+
+            StringBuilder attributeText = _legacyAttributeText ??= new ();
+            attributeText.Clear ();
+            AppendOrWriteAttribute (attributeText, attr, redrawTextStyle);
+
             // Encode once: StringBuilder chunks can split a UTF-16 surrogate pair.
-            output.Append (legacyAttributeBuffer.ToString ());
+            if (attributeText.Length > 0)
+            {
+                output.Append (attributeText.ToString ());
+            }
 
             return;
         }

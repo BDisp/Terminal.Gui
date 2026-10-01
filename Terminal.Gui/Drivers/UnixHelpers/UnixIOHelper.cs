@@ -380,8 +380,9 @@ internal static class UnixIOHelper
             {
                 int error = getError?.Invoke () ?? Marshal.GetLastPInvokeError ();
 
-                // Bound the entire call, including intermittent progress, so a slow or broken
-                // nonblocking terminal cannot monopolize the UI thread. The next frame retries.
+                // Bound consecutive stalls so a broken nonblocking terminal cannot monopolize the
+                // UI thread; the next frame retries. Progress resets the budget so a slow terminal
+                // draining its buffer still receives the whole frame.
                 if ((error == 4 || error == wouldBlock) && transientFailures++ < 8)
                 {
                     if (error == wouldBlock)
@@ -401,6 +402,7 @@ internal static class UnixIOHelper
             }
 
             offset += (int)written;
+            transientFailures = 0;
         }
 
         return true;

@@ -81,14 +81,7 @@ public class NetOutput : OutputBase, IOutput
             return;
         }
 
-        try
-        {
-            Console.Out.Write (text);
-        }
-        catch (IOException)
-        {
-            // Not connected to a terminal; do nothing
-        }
+        Console.Out.Write (text);
     }
 
     /// <inheritdoc/>
@@ -101,14 +94,7 @@ public class NetOutput : OutputBase, IOutput
             return;
         }
 
-        try
-        {
-            Console.Out.Write (output);
-        }
-        catch (IOException)
-        {
-            // Not connected to a terminal; do nothing
-        }
+        Console.Out.Write (output);
     }
 
     /// <inheritdoc/>
@@ -127,14 +113,7 @@ public class NetOutput : OutputBase, IOutput
             return;
         }
 
-        try
-        {
-            Console.Out.Write (output.AsSpan ());
-        }
-        catch (IOException)
-        {
-            // Not connected to a terminal; do nothing.
-        }
+        Console.Out.Write (output.AsSpan ());
     }
 
     /// <inheritdoc/>
@@ -177,14 +156,7 @@ public class NetOutput : OutputBase, IOutput
             return;
         }
 
-        try
-        {
-            Console.Out.Write (text);
-        }
-        catch (IOException)
-        {
-            // Not connected to a terminal; do nothing
-        }
+        Console.Out.Write (text);
     }
 
     private Cursor _currentCursor = new ();
@@ -210,16 +182,13 @@ public class NetOutput : OutputBase, IOutput
 
                 Write (EscSeqUtils.CSI_ShowCursor);
             }
-        }
-        catch
-        {
-            // Ignore any exceptions
-        }
-        finally
-        {
-            SetCursorPositionImpl (cursor.Position?.X ?? 0, cursor.Position?.Y ?? 0);
 
+            SetCursorPositionImpl (cursor.Position?.X ?? 0, cursor.Position?.Y ?? 0);
             _currentCursor = cursor;
+        }
+        catch (IOException ex)
+        {
+            Logging.Error ($"Error updating .NET console cursor: {ex.Message}");
         }
     }
 
