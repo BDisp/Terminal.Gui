@@ -2,6 +2,9 @@ namespace Terminal.Gui.App;
 
 internal partial class ApplicationImpl
 {
+    // Teardown publishes first (owner closed, last session stopped, or dispatch stopping), then releases queued work
+    // under _dispatchLock. Queued work is claimed under the same lock and only while CanStartUiWork holds, so each item
+    // either starts on the UI thread or is released by teardown, never both and never neither.
     private readonly Lock _dispatchLock = new ();
     private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
     private readonly LinkedList<PostedCallback> _postedCallbacks = new ();
@@ -56,7 +59,7 @@ internal partial class ApplicationImpl
             return operation.Task;
         }
 
-        if (MainThreadId == Thread.CurrentThread.ManagedThreadId && HasRunningSession)
+        if (CanStartUiWork)
         {
             operation.Execute ();
         }
@@ -88,7 +91,7 @@ internal partial class ApplicationImpl
 
     internal void DrainDispatches ()
     {
-        if (MainThreadId != Thread.CurrentThread.ManagedThreadId || !HasRunningSession)
+        if (!CanStartUiWork)
         {
             return;
         }
@@ -133,15 +136,7 @@ internal partial class ApplicationImpl
     {
         lock (_dispatchLock)
         {
-            if (MainThreadId != Thread.CurrentThread.ManagedThreadId
-                || _dispatchStopping
-                || operation.Owner is { IsDispatchClosed: true } or { Runnable: null }
-                || (operation.Owner is null && HasEndedSession && !HasRunningSession))
-            {
-                return false;
-            }
-
-            if (!operation.TryStart ())
+            if (!CanStartUiWork || operation.Owner is { IsDispatchClosed: true } or { Runnable: null } || !operation.TryStart ())
             {
                 return false;
             }
@@ -163,9 +158,8 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
-            // Close the owner to dispatch before lifecycle events; keep Runnable available to their handlers.
+            // End closed the owner before it stopped running; Runnable stays available to the lifecycle handlers.
             // Non-top ended tokens remain in SessionStack until the sessions above them end.
-            owner.IsDispatchClosed = true;
             HasEndedSession = true;
 
             if (HasRunningSession)
@@ -217,13 +211,13 @@ internal partial class ApplicationImpl
     /// </summary>
     internal void PostToMainLoop (SendOrPostCallback callback, object? state)
     {
-        bool canPump;
+        bool runNow;
 
         lock (_dispatchLock)
         {
-            canPump = CanPumpPostedWork;
+            runNow = CanStartUiWork;
 
-            if (canPump && (MainThreadId != Thread.CurrentThread.ManagedThreadId || TopRunnableView is not IRunnable { IsRunning: true }))
+            if (!runNow && CanPumpPostedWork)
             {
                 _postedCallbacks.AddLast (new PostedCallback (callback, state));
 
@@ -232,7 +226,7 @@ internal partial class ApplicationImpl
         }
 
         // Like Invoke: run inline on the running UI thread.
-        if (canPump)
+        if (runNow)
         {
             callback (state);
 
@@ -246,8 +240,8 @@ internal partial class ApplicationImpl
     {
         lock (_dispatchLock)
         {
-            // Teardown may have moved the remaining posts to the thread pool during an earlier callback.
-            if (_postedCallbacks.First is not { } first)
+            // Once teardown is visible, leave the post for teardown to release to the thread pool.
+            if (!CanStartUiWork || _postedCallbacks.First is not { } first)
             {
                 posted = default;
 

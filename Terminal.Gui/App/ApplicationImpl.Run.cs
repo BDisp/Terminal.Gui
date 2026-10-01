@@ -492,6 +492,9 @@ internal partial class ApplicationImpl
                 }
             }
 
+            // Close owned dispatch before the session reports stopped, so no owned work starts once teardown is visible.
+            token.IsDispatchClosed = true;
+
             // Update cached state atomically - IsRunning and IsModal are now consistent
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
@@ -571,6 +574,14 @@ internal partial class ApplicationImpl
     internal bool CanPumpPostedWork => Initialized
                                        && !Volatile.Read (ref _dispatchStopping)
                                        && (!HasEndedSession || HasRunningSession);
+
+    /// <summary>
+    ///     INTERNAL: Whether queued UI work may start on the calling thread now: it is the UI thread, dispatch is not
+    ///     stopping, and a session is running. Check it under <c>_dispatchLock</c> when claiming queued work.
+    /// </summary>
+    internal bool CanStartUiWork => MainThreadId == Thread.CurrentThread.ManagedThreadId
+                                    && !Volatile.Read (ref _dispatchStopping)
+                                    && HasRunningSession;
 
     internal void ResetHasEndedSession () => HasEndedSession = false;
 

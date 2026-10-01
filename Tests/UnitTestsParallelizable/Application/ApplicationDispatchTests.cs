@@ -725,6 +725,103 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void FinalSessionStoppingDuringDrain_ReleasesUnstartedPostToThreadPool ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        using ManualResetEventSlim endNow = new ();
+        using ManualResetEventSlim stopPublished = new ();
+        using ManualResetEventSlim finishStopping = new ();
+        using ManualResetEventSlim secondRan = new ();
+        SessionToken session = CreateSessionThatPausesWhenStopping (stopPublished, finishStopping);
+        app.SessionStack!.Push (session);
+        SynchronizationContext context = new MainLoopSyncContext (app);
+        Thread ender = EndOnWorkerWhenSignaled (app, session, endNow);
+        int? secondThreadId = null;
+
+        try
+        {
+            // The first post ends the final session from another thread, so the second has not started when it stops.
+            RunOnWorker (() =>
+                         {
+                             context.Post (_ =>
+                                           {
+                                               endNow.Set ();
+                                               stopPublished.Wait (TimeSpan.FromSeconds (10));
+                                           },
+                                           null);
+
+                             context.Post (_ =>
+                                           {
+                                               secondThreadId = Thread.CurrentThread.ManagedThreadId;
+                                               secondRan.Set ();
+                                           },
+                                           null);
+                         });
+
+            PumpUiDispatches (app);
+
+            Assert.True (stopPublished.IsSet);
+            Assert.Null (secondThreadId);
+
+            finishStopping.Set ();
+
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+            Assert.True (secondRan.Wait (TimeSpan.FromSeconds (10), TestContext.Current.CancellationToken));
+            Assert.NotEqual (app.MainThreadId, secondThreadId);
+        }
+        finally
+        {
+            finishStopping.Set ();
+            ender.Join ();
+            app.SessionStack.Clear ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void NestedSessionStoppingDuringDrain_DoesNotStartItsOwnedDispatch ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        using ManualResetEventSlim endNow = new ();
+        using ManualResetEventSlim stopPublished = new ();
+        using ManualResetEventSlim finishStopping = new ();
+        Mock<IRunnable> outer = new ();
+        outer.SetupGet (instance => instance.IsRunning).Returns (true);
+        SessionToken inner = CreateSessionThatPausesWhenStopping (stopPublished, finishStopping);
+        app.SessionStack!.Push (new SessionToken (outer.Object));
+        app.SessionStack.Push (inner);
+        Thread ender = EndOnWorkerWhenSignaled (app, inner, endNow);
+        var ownedRan = false;
+
+        try
+        {
+            // The first dispatch ends the inner session from another thread before the inner-owned dispatch starts.
+            Task first = QueueOnWorker (() => app.InvokeAsync (() =>
+                                                               {
+                                                                   endNow.Set ();
+                                                                   stopPublished.Wait (TimeSpan.FromSeconds (10));
+                                                               }));
+            Task owned = QueueOnWorker (() => app.InvokeAsync (inner, () => ownedRan = true));
+
+            PumpUiDispatches (app);
+
+            Assert.True (first.IsCompletedSuccessfully);
+            Assert.True (stopPublished.IsSet);
+            Assert.False (ownedRan);
+            Assert.True (owned.IsCanceled);
+        }
+        finally
+        {
+            finishStopping.Set ();
+            ender.Join ();
+            app.SessionStack.Clear ();
+            app.Dispose ();
+        }
+    }
+
     [Fact]
     public void OuterOwnedDispatch_RemainsValidWithNoCachedTopRunnable ()
     {
@@ -1283,6 +1380,38 @@ public class ApplicationDispatchTests
     }
 
     private static void PumpUiDispatches (IApplication app) => ((ApplicationImpl)app).DrainDispatches ();
+
+    // Reports the session as stopped, then pauses End before it releases queued work, until finishStopping is set.
+    private static SessionToken CreateSessionThatPausesWhenStopping (ManualResetEventSlim stopPublished, ManualResetEventSlim finishStopping)
+    {
+        Mock<IRunnable> runnable = new ();
+        runnable.SetupGet (instance => instance.IsRunning).Returns (() => !stopPublished.IsSet);
+
+        runnable.Setup (instance => instance.SetIsRunning (false))
+                .Callback (() =>
+                           {
+                               stopPublished.Set ();
+                               finishStopping.Wait (TimeSpan.FromSeconds (10));
+                           });
+
+        return new (runnable.Object);
+    }
+
+    private static Thread EndOnWorkerWhenSignaled (IApplication app, SessionToken session, ManualResetEventSlim endNow)
+    {
+        Thread ender = new (() =>
+                            {
+                                if (!endNow.Wait (TimeSpan.FromSeconds (10)))
+                                {
+                                    return;
+                                }
+
+                                app.End (session);
+                            });
+        ender.Start ();
+
+        return ender;
+    }
 
     private static void RunOnWorker (Action action)
     {
