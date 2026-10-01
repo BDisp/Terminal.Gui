@@ -232,6 +232,7 @@ public class OutputFailureHandlingTests
         Assert.False (driver.IsOutputRetryDue);
 
         fail = false;
+        Assert.True (SpinWait.SpinUntil (() => driver.IsOutputRetryDue, TimeSpan.FromSeconds (5)));
         driver.Refresh ();
         Assert.False (driver.NeedsOutputRetry);
         Assert.False (driver.IsOutputRetryDue);
@@ -241,6 +242,46 @@ public class OutputFailureHandlingTests
         buffer.AddStr ("Y");
         driver.Refresh ();
         Assert.True (driver.IsOutputRetryDue);
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void Refresh_DuringBackoff_DoesNotWriteUntilRetryIsDue ()
+    {
+        bool fail = true;
+        List<string> writes = [];
+        AnsiOutput output = new (bytes =>
+        {
+            if (fail)
+            {
+                return false;
+            }
+
+            writes.Add (Encoding.UTF8.GetString (bytes));
+
+            return true;
+        });
+        OutputBufferImpl buffer = new ();
+        buffer.SetSize (1, 1);
+        buffer.AddStr ("X");
+        using DriverImpl driver = CreateDriver (output, buffer);
+        driver.Refresh ();
+        driver.Refresh ();
+        Assert.False (driver.IsOutputRetryDue);
+
+        // A view that keeps redrawing must not bypass the backoff.
+        fail = false;
+        buffer.Move (0, 0);
+        buffer.AddStr ("Y");
+        driver.Refresh ();
+        Assert.Empty (writes);
+        Assert.True (driver.NeedsOutputRetry);
+
+        Assert.True (SpinWait.SpinUntil (() => driver.IsOutputRetryDue, TimeSpan.FromSeconds (5)));
+        driver.Refresh ();
+
+        Assert.Contains ("Y", Assert.Single (writes));
+        Assert.False (driver.NeedsOutputRetry);
     }
 
     // Claude - Opus 5.5

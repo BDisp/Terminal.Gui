@@ -93,6 +93,13 @@ internal class DriverImpl : IDriver
     /// <inheritdoc/>
     public void Refresh ()
     {
+        // While backing off after repeated failures, keep the dirty cells for the next due attempt.
+        // Gating here covers every flush path, including views that redraw every iteration.
+        if (NeedsOutputRetry && !IsOutputRetryDue)
+        {
+            return;
+        }
+
         try
         {
             // Hide cursor during rendering to prevent flicker.
