@@ -327,6 +327,8 @@ internal partial class ApplicationImpl
             System.Threading.SynchronizationContext.SetSynchronizationContext (null);
         }
 
+        _callerSynchronizationContext = null;
+
         // === 10. Unsubscribe from Application static property change events ===
         UnsubscribeApplicationEvents ();
     }

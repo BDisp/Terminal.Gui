@@ -114,6 +114,9 @@ internal partial class ApplicationImpl
 
     #region Session Lifecycle - Begin
 
+    // The ambient context from before the first running session installed this app's context.
+    private SynchronizationContext? _callerSynchronizationContext;
+
     /// <inheritdoc/>
     public SessionToken? Begin (IRunnable runnable)
     {
@@ -142,9 +145,13 @@ internal partial class ApplicationImpl
         // Set the application reference in the runnable
         runnable.SetApp (this);
 
-        // Set the synchronization context to MainLoopSyncContext for this application, saving the
-        // caller's context on the token so End can restore it (#5636).
-        token.PreviousSynchronizationContext = System.Threading.SynchronizationContext.Current;
+        // Make this app's MainLoopSyncContext ambient while sessions run. The first running session saves the
+        // caller's context so the last session to end can restore it (#5636).
+        if (!HasRunningSession && System.Threading.SynchronizationContext.Current != SynchronizationContext)
+        {
+            _callerSynchronizationContext = System.Threading.SynchronizationContext.Current;
+        }
+
         SynchronizationContext.SetSynchronizationContext (SynchronizationContext);
 
         // Ensure the mouse is ungrabbed
@@ -296,7 +303,11 @@ internal partial class ApplicationImpl
         }
         finally
         {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (previousContext);
+            // Once the last session has ended, End has restored the caller's context; do not reinstall this app's.
+            if (HasRunningSession || previousContext != SynchronizationContext)
+            {
+                System.Threading.SynchronizationContext.SetSynchronizationContext (previousContext);
+            }
         }
     }
 
@@ -469,6 +480,7 @@ internal partial class ApplicationImpl
 
         bool wasModal = runnable.IsModal;
         IRunnable? previousRunnable = null;
+        bool endsLastRunningSession;
 
         // CRITICAL SECTION - Atomic stack + cached state update
         lock (_sessionStackLock)
@@ -498,6 +510,9 @@ internal partial class ApplicationImpl
             // Update cached state atomically - IsRunning and IsModal are now consistent
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
+
+            // Decide with this session's stop published whether any session still needs this app's context.
+            endsLastRunningSession = !HasRunningSession;
 
             if (wasModal)
             {
@@ -538,12 +553,12 @@ internal partial class ApplicationImpl
             // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
             token.Runnable = null;
 
-            // Restore the ambient context the caller had at Begin, so an await after a directly-begun
-            // session cannot capture a context that is no longer pumping (#5636). For nested sessions
-            // the previous context is the same app context, so the outermost End restores the caller's.
-            if (System.Threading.SynchronizationContext.Current == SynchronizationContext)
+            // Keep this app's context ambient while any session still runs, even if this one began first. After the
+            // last running session, restore the caller's context so a later await cannot capture a context that is
+            // no longer pumping (#5636).
+            if (endsLastRunningSession && System.Threading.SynchronizationContext.Current == SynchronizationContext)
             {
-                System.Threading.SynchronizationContext.SetSynchronizationContext (token.PreviousSynchronizationContext);
+                System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
             }
 
             SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));

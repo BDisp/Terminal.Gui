@@ -121,6 +121,129 @@ public class SyncContextLifecycleTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void Begin_End_OuterEndedFirst_KeepsAppContextUntilLastSessionEnds ()
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext marker = new ();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (marker);
+
+            IApplication app = Application.Create ();
+            app.Init (DriverRegistry.Names.ANSI);
+            SynchronizationContext appContext = ((ApplicationImpl)app).SynchronizationContext!;
+
+            using Runnable outer = new ();
+            using Runnable inner = new ();
+
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+
+            app.End (outerToken);
+
+            // The inner session is still running, so its awaits must keep resuming on the UI loop.
+            Assert.Same (appContext, SynchronizationContext.Current);
+
+            app.End (innerToken);
+
+            Assert.Same (marker, SynchronizationContext.Current);
+
+            app.Dispose ();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void Run_NestedInBegunSession_RestoresCallerContextWhenOuterEndedFirst ()
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext marker = new ();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (marker);
+
+            IApplication app = Application.Create ();
+            app.Init (DriverRegistry.Names.ANSI);
+
+            using Runnable outer = new ();
+            using Runnable inner = new ();
+            SessionToken outerToken = app.Begin (outer)!;
+
+            // The outer session ends first, while the inner session is still stopping.
+            inner.IsRunningChanging += (_, e) =>
+                                       {
+                                           if (e.NewValue)
+                                           {
+                                               return;
+                                           }
+
+                                           app.End (outerToken);
+                                       };
+
+            void OnIteration (object? s, EventArgs<IApplication?> a) => app.RequestStop ();
+
+            app.Iteration += OnIteration;
+            app.Run (inner);
+            app.Iteration -= OnIteration;
+
+            // No session is running, so Run must not reinstall the app context it found when it started.
+            Assert.False (outer.IsRunning);
+            Assert.Same (marker, SynchronizationContext.Current);
+
+            app.Dispose ();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void Begin_AfterFinalSessionEndedOnWorker_StillRestoresCallerContext ()
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext marker = new ();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (marker);
+
+            IApplication app = Application.Create ();
+            app.Init (DriverRegistry.Names.ANSI);
+            SynchronizationContext appContext = ((ApplicationImpl)app).SynchronizationContext!;
+
+            using Runnable first = new ();
+            using Runnable second = new ();
+            SessionToken firstToken = app.Begin (first)!;
+
+            // A worker cannot change this thread's context, so the app context stays ambient here.
+            Thread ender = new (() => app.End (firstToken));
+            ender.Start ();
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+            Assert.Same (appContext, SynchronizationContext.Current);
+
+            SessionToken secondToken = app.Begin (second)!;
+            app.End (secondToken);
+
+            Assert.Same (marker, SynchronizationContext.Current);
+
+            app.Dispose ();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+    }
+
     // A continuation that captured the app context during a session can resume after the session
     // ends; with no loop pumping (and the app still Initialized), it must not be stranded.
     [Fact]
