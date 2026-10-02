@@ -453,26 +453,42 @@ internal partial class ApplicationImpl
     {
         ArgumentNullException.ThrowIfNull (token);
 
-        if (token.Runnable is not { } runnable || token.IsDispatchClosed)
+        // Claim the session before the cancellable IsRunningChanging, so a concurrent or reentrant End returns instead
+        // of raising it again or tearing down ahead of a veto. Once teardown starts, the claim is never released.
+        if (token.Runnable is not { } runnable || !token.TryClaimEnd ())
         {
             return; // Already ended or ending
         }
 
         Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()}");
 
-        if (Popovers?.GetActivePopover () is { Visible: true } visiblePopover)
+        var stopping = false;
+
+        try
         {
-            ApplicationPopover.HideWithQuitCommand (visiblePopover);
+            if (Popovers?.GetActivePopover () is { Visible: true } visiblePopover)
+            {
+                ApplicationPopover.HideWithQuitCommand (visiblePopover);
+            }
+
+            // Get old IsRunning value (safe - cached value)
+            bool oldIsRunning = runnable.IsRunning;
+
+            // Raise IsRunningChanging OUTSIDE lock (true -> false) - can be canceled
+            // This is where Result should be extracted!
+            stopping = !runnable.RaiseIsRunningChanging (oldIsRunning, false);
+        }
+        finally
+        {
+            // Stopping was canceled or a handler threw; release the claim so a later End can stop this session.
+            if (!stopping)
+            {
+                token.ReleaseEndClaim ();
+            }
         }
 
-        // Get old IsRunning value (safe - cached value)
-        bool oldIsRunning = runnable.IsRunning;
-
-        // Raise IsRunningChanging OUTSIDE lock (true -> false) - can be canceled
-        // This is where Result should be extracted!
-        if (runnable.RaiseIsRunningChanging (oldIsRunning, false))
+        if (!stopping)
         {
-            // Stopping was canceled - do not proceed with End
             return;
         }
 
@@ -483,13 +499,7 @@ internal partial class ApplicationImpl
         // CRITICAL SECTION - Atomic stack + cached state update
         lock (_sessionStackLock)
         {
-            // Claim teardown: a concurrent or reentrant End that passed the check above returns here. Closing owned
-            // dispatch first also keeps owned work from starting once teardown is visible.
-            if (token.IsDispatchClosed)
-            {
-                return;
-            }
-
+            // Close owned dispatch first, so no owned work starts once teardown is visible.
             token.IsDispatchClosed = true;
 
             // Read under the lock: a concurrent Begin moves IsModal to the session it pushes.
@@ -540,7 +550,7 @@ internal partial class ApplicationImpl
 
         EndSessionDispatches (token);
 
-        // IsDispatchClosed now makes End a no-op, so finish teardown even if a state-change handler throws.
+        // The held claim now makes End a no-op, so finish teardown even if a state-change handler throws.
         try
         {
             // Fire events AFTER lock released

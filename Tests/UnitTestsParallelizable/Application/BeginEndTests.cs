@@ -443,13 +443,16 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
 
     // Claude - Opus 5.5
     [Fact]
-    public void End_CalledConcurrentlyForSameSession_TearsDownOnce ()
+    public void End_CalledWhileAnotherEndIsDeciding_HasNoEffect ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Runnable outer = new ();
         Runnable inner = new ();
-        using Barrier bothEnding = new (2);
+        using ManualResetEventSlim deciding = new ();
+        using ManualResetEventSlim decide = new ();
+        var changingCount = 0;
         var endedCount = 0;
+        Exception? error = null;
         EventHandler<SessionTokenEventArgs> onEnded = (_, _) => Interlocked.Increment (ref endedCount);
 
         try
@@ -457,46 +460,58 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
             SessionToken outerToken = app.Begin (outer)!;
             SessionToken innerToken = app.Begin (inner)!;
 
-            // Hold both callers past End's unlocked check until each is ending the same session.
-            inner.IsRunningChanging += (_, _) => bothEnding.SignalAndWait (TimeSpan.FromSeconds (10));
+            // Hold the first End inside its cancellable IsRunningChanging until the second End has run.
+            inner.IsRunningChanging += (_, _) =>
+                                       {
+                                           if (Interlocked.Increment (ref changingCount) > 1)
+                                           {
+                                               return;
+                                           }
+
+                                           deciding.Set ();
+                                           decide.Wait (TimeSpan.FromSeconds (10));
+                                       };
             app.SessionEnded += onEnded;
 
-            Exception? [] errors = new Exception? [2];
-            Thread [] enders = [StartEnder (0), StartEnder (1)];
-
-            foreach (Thread ender in enders)
+            Thread ender = new (() =>
+                                {
+                                    try
+                                    {
+                                        app.End (innerToken);
+                                    }
+                                    catch (Exception exception)
+                                    {
+                                        error = exception;
+                                    }
+                                })
             {
-                Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
-            }
+                IsBackground = true
+            };
+            ender.Start ();
+            Assert.True (deciding.Wait (TimeSpan.FromSeconds (10), TestContext.Current.CancellationToken));
 
-            Assert.All (errors, Assert.Null);
+            app.End (innerToken);
+
+            Assert.Equal (1, changingCount);
+            Assert.Equal (0, endedCount);
+            Assert.True (inner.IsRunning);
+            Assert.Same (inner, app.TopRunnable);
+
+            decide.Set ();
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+
+            Assert.Null (error);
+            Assert.Equal (1, changingCount);
             Assert.Equal (1, endedCount);
             Assert.False (inner.IsRunning);
             Assert.Same (outerToken, Assert.Single (app.SessionStack!));
             Assert.Same (outer, app.TopRunnable);
             Assert.True (outer.IsModal);
             app.End (outerToken);
-
-            Thread StartEnder (int index)
-            {
-                Thread ender = new (() =>
-                                    {
-                                        try
-                                        {
-                                            app.End (innerToken);
-                                        }
-                                        catch (Exception exception)
-                                        {
-                                            errors [index] = exception;
-                                        }
-                                    });
-                ender.Start ();
-
-                return ender;
-            }
         }
         finally
         {
+            decide.Set ();
             app.SessionEnded -= onEnded;
             inner.Dispose ();
             outer.Dispose ();
@@ -510,6 +525,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         Runnable runnable = new ();
+        var changingCount = 0;
         var endedCount = 0;
         var stoppedCount = 0;
         EventHandler<SessionTokenEventArgs> onEnded = (_, _) => endedCount++;
@@ -517,16 +533,15 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
         try
         {
             SessionToken token = app.Begin (runnable)!;
-            var reentered = false;
 
             runnable.IsRunningChanging += (_, _) =>
                                           {
-                                              if (reentered)
+                                              // Guard against unbounded recursion if the reentrant End raises this again.
+                                              if (++changingCount > 1)
                                               {
                                                   return;
                                               }
 
-                                              reentered = true;
                                               app.End (token);
                                           };
             runnable.IsRunningChanged += (_, args) => stoppedCount += args.Value ? 0 : 1;
@@ -534,6 +549,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
 
             app.End (token);
 
+            Assert.Equal (1, changingCount);
             Assert.Equal (1, endedCount);
             Assert.Equal (1, stoppedCount);
             Assert.Empty (app.SessionStack!);
@@ -542,6 +558,126 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
         finally
         {
             app.SessionEnded -= onEnded;
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_CalledFromOwnIsRunningChangingHandler_DoesNotBypassLaterVeto ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        var veto = true;
+        var changingCount = 0;
+        bool? runningAfterReentrantEnd = null;
+
+        try
+        {
+            SessionToken token = app.Begin (runnable)!;
+
+            runnable.IsRunningChanging += (_, _) =>
+                                          {
+                                              // Guard against unbounded recursion if the reentrant End raises this again.
+                                              if (++changingCount > 1)
+                                              {
+                                                  return;
+                                              }
+
+                                              app.End (token);
+                                              runningAfterReentrantEnd = runnable.IsRunning;
+                                          };
+
+            // A later subscriber vetoes only the first stop it sees, as a confirmation prompt answered "No" would.
+            runnable.IsRunningChanging += (_, args) =>
+                                          {
+                                              args.Cancel = veto;
+                                              veto = false;
+                                          };
+
+            app.End (token);
+
+            Assert.Equal (1, changingCount);
+            Assert.True (runningAfterReentrantEnd);
+            Assert.True (runnable.IsRunning);
+            Assert.Same (token, Assert.Single (app.SessionStack!));
+            Assert.Same (runnable, app.TopRunnable);
+
+            app.End (token);
+
+            Assert.False (runnable.IsRunning);
+            Assert.Empty (app.SessionStack!);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_AfterVetoedEnd_EndsSession ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        var veto = true;
+
+        try
+        {
+            SessionToken token = app.Begin (runnable)!;
+            runnable.IsRunningChanging += (_, args) => args.Cancel = veto;
+
+            app.End (token);
+            Assert.True (runnable.IsRunning);
+
+            veto = false;
+            app.End (token);
+
+            Assert.False (runnable.IsRunning);
+            Assert.Null (token.Runnable);
+            Assert.Empty (app.SessionStack!);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_AfterIsRunningChangingThrows_EndsSession ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        var fail = true;
+
+        try
+        {
+            SessionToken token = app.Begin (runnable)!;
+
+            runnable.IsRunningChanging += (_, _) =>
+                                          {
+                                              if (fail)
+                                              {
+                                                  throw new InvalidOperationException ("Stop failed");
+                                              }
+                                          };
+
+            Assert.Throws<InvalidOperationException> (() => app.End (token));
+            Assert.True (runnable.IsRunning);
+
+            fail = false;
+            app.End (token);
+
+            Assert.False (runnable.IsRunning);
+            Assert.Null (token.Runnable);
+            Assert.Empty (app.SessionStack!);
+        }
+        finally
+        {
             runnable.Dispose ();
             app.Dispose ();
         }

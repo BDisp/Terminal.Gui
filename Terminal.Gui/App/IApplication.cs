@@ -454,8 +454,10 @@ public interface IApplication : IDisposable
     ///     </para>
     ///     <para>
     ///         Raises <see cref="IRunnable.IsRunningChanging"/>, <see cref="IRunnable.IsRunningChanged"/>,
-    ///         and <see cref="IRunnable.IsModalChanged"/> events. A session is torn down only once, even if this
-    ///         method is called again, reentrantly, or concurrently for the same token.
+    ///         and <see cref="IRunnable.IsModalChanged"/> events. While a call is ending the session, including while
+    ///         its <see cref="IRunnable.IsRunningChanging"/> handlers run, other calls for the same token return
+    ///         without effect. If stopping is canceled, a later call can end the session. A session is torn down
+    ///         only once.
     ///     </para>
     /// </remarks>
     void End (SessionToken sessionToken);

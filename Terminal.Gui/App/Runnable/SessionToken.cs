@@ -14,6 +14,17 @@ public class SessionToken
     /// </summary>
     public IRunnable? Runnable { get; internal set; }
 
+    private int _endClaimed;
+
+    /// <summary>
+    ///     Claims this session for <see cref="IApplication.End(SessionToken)"/>. Fails while another call holds the
+    ///     claim, and after teardown has started.
+    /// </summary>
+    internal bool TryClaimEnd () => Interlocked.CompareExchange (ref _endClaimed, 1, 0) == 0;
+
+    /// <summary>Releases the claim taken by <see cref="TryClaimEnd"/> when stopping is canceled or fails.</summary>
+    internal void ReleaseEndClaim () => Volatile.Write (ref _endClaimed, 0);
+
     private bool _isDispatchClosed;
 
     /// <summary>Whether this session has stopped accepting and running owned dispatches.</summary>
