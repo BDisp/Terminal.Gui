@@ -685,6 +685,72 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
 
     // Claude - Opus 5.5
     [Fact]
+    public void End_WhenIsModalChangedHandlerThrows_RaisesRemainingNotifications ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        InvalidOperationException failure = new ("modal handler failed");
+        var outerBecameModal = false;
+        var innerStopped = false;
+        SessionToken? endedToken = null;
+        EventHandler<SessionTokenEventArgs> onEnded = (_, args) => endedToken = args.State;
+
+        try
+        {
+            app.Begin (outer);
+            SessionToken innerToken = app.Begin (inner)!;
+            app.SessionEnded += onEnded;
+            inner.IsModalChanged += (_, _) => throw failure;
+            outer.IsModalChanged += (_, args) => outerBecameModal = args.Value;
+            inner.IsRunningChanged += (_, args) => innerStopped = !args.Value;
+
+            Assert.Same (failure, Assert.Throws<InvalidOperationException> (() => app.End (innerToken)));
+
+            Assert.True (outerBecameModal);
+            Assert.True (innerStopped);
+            Assert.Same (innerToken, endedToken);
+            Assert.Null (innerToken.Runnable);
+            Assert.Same (outer, app.TopRunnable);
+        }
+        finally
+        {
+            app.SessionEnded -= onEnded;
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_WhenSeveralNotificationHandlersThrow_RethrowsFirst ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        InvalidOperationException first = new ("modal handler failed");
+        EventHandler<SessionTokenEventArgs> onEnded = (_, _) => throw new InvalidOperationException ("ended handler failed");
+
+        try
+        {
+            SessionToken token = app.Begin (runnable)!;
+            app.SessionEnded += onEnded;
+            runnable.IsModalChanged += (_, _) => throw first;
+            runnable.IsRunningChanged += (_, _) => throw new InvalidOperationException ("running handler failed");
+
+            Assert.Same (first, Assert.Throws<InvalidOperationException> (() => app.End (token)));
+            Assert.Null (token.Runnable);
+        }
+        finally
+        {
+            app.SessionEnded -= onEnded;
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
     public void End_OfModalSessionBeneathTop_DoesNotPopTop ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);

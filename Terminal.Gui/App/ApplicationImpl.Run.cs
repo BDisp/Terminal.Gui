@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using Terminal.Gui.Tracing;
 
 namespace Terminal.Gui.App;
@@ -494,7 +495,6 @@ internal partial class ApplicationImpl
 
         bool wasModal;
         IRunnable? previousRunnable = null;
-        bool endsLastRunningSession;
 
         // CRITICAL SECTION - Atomic stack + cached state update
         lock (_sessionStackLock)
@@ -532,9 +532,6 @@ internal partial class ApplicationImpl
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
 
-            // Decide with this session's stop published whether any session still needs this app's context.
-            endsLastRunningSession = !HasRunningSession;
-
             if (wasTop)
             {
                 TopRunnable = previousRunnable;
@@ -550,44 +547,57 @@ internal partial class ApplicationImpl
 
         EndSessionDispatches (token);
 
-        // The held claim now makes End a no-op, so finish teardown even if a state-change handler throws.
-        try
+        // The held claim now makes End a no-op, so finish teardown and raise every notification even if a handler
+        // throws. The first exception is rethrown after SessionEnded.
+        ExceptionDispatchInfo? failure = null;
+
+        // Fire events AFTER lock released
+        if (wasModal)
         {
-            // Fire events AFTER lock released
-            if (wasModal)
-            {
-                runnable.RaiseIsModalChangedEvent (false);
-            }
-
-            if (previousRunnable != null)
-            {
-                previousRunnable.RaiseIsModalChangedEvent (true);
-            }
-
-            Mouse.UngrabMouse ();
-
-            runnable.RaiseIsRunningChangedEvent (false);
+            Notify (() => runnable.RaiseIsModalChangedEvent (false));
         }
-        finally
+
+        if (previousRunnable is { } restoredRunnable)
         {
-            token.Result = runnable.Result;
+            Notify (() => restoredRunnable.RaiseIsModalChangedEvent (true));
+        }
 
-            _result = token.Result;
+        Notify (Mouse.UngrabMouse);
+        Notify (() => runnable.RaiseIsRunningChangedEvent (false));
 
-            Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
+        token.Result = runnable.Result;
 
-            // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
-            token.Runnable = null;
+        _result = token.Result;
 
-            // Keep this app's context ambient while any session still runs, even if this one began first. After the
-            // last running session, restore the caller's context so a later await cannot capture a context that is
-            // no longer pumping (#5636).
-            if (endsLastRunningSession && System.Threading.SynchronizationContext.Current == SynchronizationContext)
+        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
+
+        // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
+        token.Runnable = null;
+
+        // Keep this app's context ambient while any session still runs, including one that began first or one a
+        // handler above began. After the last running session, restore the caller's context so a later await cannot
+        // capture a context that is no longer pumping (#5636).
+        if (!HasRunningSession && System.Threading.SynchronizationContext.Current == SynchronizationContext)
+        {
+            System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
+        }
+
+        Notify (() => SessionEnded?.Invoke (this, new SessionTokenEventArgs (token)));
+
+        failure?.Throw ();
+
+        return;
+
+        void Notify (Action raise)
+        {
+            try
             {
-                System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
+                raise ();
             }
-
-            SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture (exception);
+            }
         }
     }
 

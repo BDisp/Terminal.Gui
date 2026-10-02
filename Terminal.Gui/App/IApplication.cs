@@ -113,7 +113,9 @@ public interface IApplication : IDisposable
     ///         Session tokens are pushed onto the stack when <see cref="Run(IRunnable, Func{Exception, bool})"/> is called and
     ///         popped when
     ///         <see cref="RequestStop(IRunnable)"/> completes. The stack grows during nested modal calls and
-    ///         shrinks as they complete.
+    ///         shrinks as they complete. A session that ends beneath the top keeps its token on the stack, with a
+    ///         <see langword="null"/> <see cref="SessionToken.Runnable"/>, until the sessions above it end; to find
+    ///         running sessions, check <c>token.Runnable is { IsRunning: true }</c>.
     ///     </para>
     ///     <para>
     ///         Only the top session (<see cref="TopRunnableView"/>) has exclusive keyboard/mouse input (
@@ -450,14 +452,16 @@ public interface IApplication : IDisposable
     ///     <para>
     ///         This method removes the <see cref="IRunnable"/> from the <see cref="SessionStack"/>,
     ///         raises the lifecycle events, and clears <see cref="SessionToken.Runnable"/> on
-    ///         <paramref name="sessionToken"/>.
+    ///         <paramref name="sessionToken"/>. A token ended beneath the top stays on the stack until the sessions above
+    ///         it end.
     ///     </para>
     ///     <para>
     ///         Raises <see cref="IRunnable.IsRunningChanging"/>, <see cref="IRunnable.IsRunningChanged"/>,
     ///         and <see cref="IRunnable.IsModalChanged"/> events. While a call is ending the session, including while
     ///         its <see cref="IRunnable.IsRunningChanging"/> handlers run, other calls for the same token return
     ///         without effect. If stopping is canceled, a later call can end the session. A session is torn down
-    ///         only once.
+    ///         only once. Once stopping proceeds, every remaining event, including <see cref="SessionEnded"/>, is raised
+    ///         even if a handler throws; the first exception is then rethrown.
     ///     </para>
     /// </remarks>
     void End (SessionToken sessionToken);

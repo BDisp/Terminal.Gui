@@ -161,6 +161,54 @@ public class SyncContextLifecycleTests
 
     // Claude - Opus 5.5
     [Fact]
+    public void End_WhenStoppedHandlerBeginsSession_KeepsAppContextUntilThatSessionEnds ()
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext marker = new ();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (marker);
+
+            IApplication app = Application.Create ();
+            app.Init (DriverRegistry.Names.ANSI);
+            SynchronizationContext appContext = ((ApplicationImpl)app).SynchronizationContext!;
+
+            using Runnable first = new ();
+            using Runnable next = new ();
+            SessionToken? nextToken = null;
+
+            SessionToken firstToken = app.Begin (first)!;
+            first.IsRunningChanged += (_, args) =>
+                                      {
+                                          if (args.Value)
+                                          {
+                                              return;
+                                          }
+
+                                          nextToken = app.Begin (next);
+                                      };
+
+            app.End (firstToken);
+
+            // The session begun while the last one was ending is running, so its awaits must resume on the UI loop.
+            Assert.True (next.IsRunning);
+            Assert.Same (appContext, SynchronizationContext.Current);
+
+            app.End (nextToken!);
+
+            Assert.Same (marker, SynchronizationContext.Current);
+
+            app.Dispose ();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
     public void Run_NestedInBegunSession_RestoresCallerContextWhenOuterEndedFirst ()
     {
         SynchronizationContext? previous = SynchronizationContext.Current;

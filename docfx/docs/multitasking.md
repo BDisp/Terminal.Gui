@@ -37,6 +37,10 @@ catch (OperationCanceledException)
 {
     // The session or request ended before the UI update could run.
 }
+catch (NotInitializedException)
+{
+    // The application shut down before the UI update was requested.
+}
 ```
 
 `InvokeAsync` completes after the callback runs on the UI thread. Queued dispatches are independent of user timers, so `TimedEvents.Remove` and `TimedEvents.StopAll` do not discard them. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. An `OperationCanceledException` carrying the canceled caller token also cancels the task when thrown by a running callback. Other callback exceptions fault the returned task; they do not reach the main-loop error handler, so await or inspect the task. A UI-thread call during a running session executes immediately and returns an already completed, canceled, or faulted task; an owned call whose session has not started running yet (for example, from `SessionBegun`) runs after that session starts. To cancel a specific request, pass its `CancellationToken` as the final argument. Custom `IApplication` implementations can support these extensions by implementing `IApplicationAsyncDispatcher`. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
