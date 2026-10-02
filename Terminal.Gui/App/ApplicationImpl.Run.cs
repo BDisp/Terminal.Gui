@@ -453,19 +453,17 @@ internal partial class ApplicationImpl
     {
         ArgumentNullException.ThrowIfNull (token);
 
-        if (token.Runnable is null || token.IsDispatchClosed)
+        if (token.Runnable is not { } runnable || token.IsDispatchClosed)
         {
             return; // Already ended or ending
         }
 
-        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()}");
+        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()}");
 
         if (Popovers?.GetActivePopover () is { Visible: true } visiblePopover)
         {
             ApplicationPopover.HideWithQuitCommand (visiblePopover);
         }
-
-        IRunnable runnable = token.Runnable;
 
         // Get old IsRunning value (safe - cached value)
         bool oldIsRunning = runnable.IsRunning;
@@ -478,16 +476,32 @@ internal partial class ApplicationImpl
             return;
         }
 
-        bool wasModal = runnable.IsModal;
+        bool wasModal;
         IRunnable? previousRunnable = null;
         bool endsLastRunningSession;
 
         // CRITICAL SECTION - Atomic stack + cached state update
         lock (_sessionStackLock)
         {
-            // Pop token from SessionStack
-            if (wasModal && SessionStack?.TryPop (out SessionToken? popped) == true && popped == token)
+            // Claim teardown: a concurrent or reentrant End that passed the check above returns here. Closing owned
+            // dispatch first also keeps owned work from starting once teardown is visible.
+            if (token.IsDispatchClosed)
             {
+                return;
+            }
+
+            token.IsDispatchClosed = true;
+
+            // Read under the lock: a concurrent Begin moves IsModal to the session it pushes.
+            wasModal = runnable.IsModal;
+
+            // Pop only this token; popping first and comparing after would discard another session.
+            bool wasTop = wasModal && SessionStack?.TryPeek (out SessionToken? top) == true && top == token;
+
+            if (wasTop)
+            {
+                SessionStack!.TryPop (out _);
+
                 // Discard sessions that ended while beneath this one so the nearest running session becomes top.
                 while (SessionStack?.TryPeek (out SessionToken? endedToken) == true && endedToken.Runnable is not { IsRunning: true })
                 {
@@ -504,9 +518,6 @@ internal partial class ApplicationImpl
                 }
             }
 
-            // Close owned dispatch before the session reports stopped, so no owned work starts once teardown is visible.
-            token.IsDispatchClosed = true;
-
             // Update cached state atomically - IsRunning and IsModal are now consistent
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
@@ -514,7 +525,7 @@ internal partial class ApplicationImpl
             // Decide with this session's stop published whether any session still needs this app's context.
             endsLastRunningSession = !HasRunningSession;
 
-            if (wasModal)
+            if (wasTop)
             {
                 TopRunnable = previousRunnable;
             }

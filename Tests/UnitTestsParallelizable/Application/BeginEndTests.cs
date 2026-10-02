@@ -443,6 +443,145 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
 
     // Claude - Opus 5.5
     [Fact]
+    public void End_CalledConcurrentlyForSameSession_TearsDownOnce ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        using Barrier bothEnding = new (2);
+        var endedCount = 0;
+        EventHandler<SessionTokenEventArgs> onEnded = (_, _) => Interlocked.Increment (ref endedCount);
+
+        try
+        {
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+
+            // Hold both callers past End's unlocked check until each is ending the same session.
+            inner.IsRunningChanging += (_, _) => bothEnding.SignalAndWait (TimeSpan.FromSeconds (10));
+            app.SessionEnded += onEnded;
+
+            Exception? [] errors = new Exception? [2];
+            Thread [] enders = [StartEnder (0), StartEnder (1)];
+
+            foreach (Thread ender in enders)
+            {
+                Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+            }
+
+            Assert.All (errors, Assert.Null);
+            Assert.Equal (1, endedCount);
+            Assert.False (inner.IsRunning);
+            Assert.Same (outerToken, Assert.Single (app.SessionStack!));
+            Assert.Same (outer, app.TopRunnable);
+            Assert.True (outer.IsModal);
+            app.End (outerToken);
+
+            Thread StartEnder (int index)
+            {
+                Thread ender = new (() =>
+                                    {
+                                        try
+                                        {
+                                            app.End (innerToken);
+                                        }
+                                        catch (Exception exception)
+                                        {
+                                            errors [index] = exception;
+                                        }
+                                    });
+                ender.Start ();
+
+                return ender;
+            }
+        }
+        finally
+        {
+            app.SessionEnded -= onEnded;
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_CalledFromOwnIsRunningChangingHandler_TearsDownOnce ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        var endedCount = 0;
+        var stoppedCount = 0;
+        EventHandler<SessionTokenEventArgs> onEnded = (_, _) => endedCount++;
+
+        try
+        {
+            SessionToken token = app.Begin (runnable)!;
+            var reentered = false;
+
+            runnable.IsRunningChanging += (_, _) =>
+                                          {
+                                              if (reentered)
+                                              {
+                                                  return;
+                                              }
+
+                                              reentered = true;
+                                              app.End (token);
+                                          };
+            runnable.IsRunningChanged += (_, args) => stoppedCount += args.Value ? 0 : 1;
+            app.SessionEnded += onEnded;
+
+            app.End (token);
+
+            Assert.Equal (1, endedCount);
+            Assert.Equal (1, stoppedCount);
+            Assert.Empty (app.SessionStack!);
+            Assert.Null (app.TopRunnable);
+        }
+        finally
+        {
+            app.SessionEnded -= onEnded;
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void End_OfModalSessionBeneathTop_DoesNotPopTop ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+
+        try
+        {
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+
+            // Leave the outer session modal beneath the top, as a Begin racing End's modal read would.
+            outer.SetIsModal (true);
+
+            app.End (outerToken);
+
+            Assert.False (outer.IsRunning);
+            Assert.Same (innerToken, app.SessionStack!.First ());
+            Assert.Same (inner, app.TopRunnable);
+            Assert.True (inner.IsModal);
+            app.End (innerToken);
+            Assert.Empty (app.SessionStack!);
+        }
+        finally
+        {
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
     public void LayoutAndDraw_AfterNonTopSessionEnded_DrawsOnlyRunningSessions ()
     {
         IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
