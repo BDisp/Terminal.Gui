@@ -1,3 +1,5 @@
+using UnitTests;
+
 namespace ApplicationTests.BeginEnd;
 
 /// <summary>
@@ -435,6 +437,94 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                 runnable.Dispose ();
             }
 
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void LayoutAndDraw_AfterNonTopSessionEnded_DrawsOnlyRunningSessions ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        app.Driver!.SetScreenSize (10, 3);
+        Runnable outer = new () { Text = "OOOOOOOOOO\nOOOOOOOOOO\nOOOOOOOOOO" };
+        Runnable inner = new () { X = 2, Y = 1, Width = 5, Height = 1, Text = "inner" };
+
+        try
+        {
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+            app.LayoutAndDraw ();
+            DriverAssert.AssertDriverContentsAre ("OOOOOOOOOO\nOOinnerOOO\nOOOOOOOOOO", _output, app.Driver);
+
+            app.End (outerToken);
+            app.LayoutAndDraw ();
+
+            DriverAssert.AssertDriverContentsAre ("inner", _output, app.Driver);
+            app.End (innerToken);
+        }
+        finally
+        {
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void GetViewsUnderLocation_AfterNonTopSessionEnded_SkipsEndedSession ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        app.Driver!.SetScreenSize (10, 3);
+        Runnable outer = new ();
+        Runnable inner = new () { X = 2, Y = 1, Width = 5, Height = 1 };
+
+        try
+        {
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+            app.End (outerToken);
+
+            Assert.Empty (inner.GetViewsUnderLocation (new Point (0, 0), ViewportSettingsFlags.None));
+            Assert.Contains (inner, inner.GetViewsUnderLocation (new Point (3, 1), ViewportSettingsFlags.None));
+            app.End (innerToken);
+        }
+        finally
+        {
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void MovingLastRunningSession_AfterNonTopSessionEnded_ClearsOldCells ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        app.Driver!.SetScreenSize (10, 3);
+        Runnable outer = new ();
+        Runnable inner = new () { X = 2, Y = 1, Width = 5, Height = 1, Text = "inner" };
+
+        try
+        {
+            SessionToken outerToken = app.Begin (outer)!;
+            SessionToken innerToken = app.Begin (inner)!;
+            app.End (outerToken);
+            app.LayoutAndDraw ();
+
+            inner.X = 4;
+            app.LayoutAndDraw ();
+
+            Assert.Equal (4, inner.Frame.X);
+            DriverAssert.AssertDriverContentsAre ("inner", _output, app.Driver);
+            app.End (innerToken);
+        }
+        finally
+        {
+            inner.Dispose ();
+            outer.Dispose ();
             app.Dispose ();
         }
     }

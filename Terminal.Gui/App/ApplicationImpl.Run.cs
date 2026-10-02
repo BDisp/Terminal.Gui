@@ -518,6 +518,11 @@ internal partial class ApplicationImpl
             {
                 TopRunnable = previousRunnable;
             }
+            else
+            {
+                // A session ended beneath the top is no longer drawn; clear its cells on the next draw.
+                ClearScreenNextIteration = true;
+            }
         }
 
         // END CRITICAL SECTION - IsRunning/IsModal now thread-safe
