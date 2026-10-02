@@ -277,7 +277,7 @@ public class FileDialog : Runnable<string?>
 
 ### Lifecycle Properties
 
-- **<xref:Terminal.Gui.App.IRunnable.IsRunning>** - True when runnable is on <xref:Terminal.Gui.App.IApplication.SessionStack>
+- **<xref:Terminal.Gui.App.IRunnable.IsRunning>** - True from [Begin()](xref:Terminal.Gui.App.IApplication.Begin*) until [End()](xref:Terminal.Gui.App.IApplication.End*) stops the session
 - **<xref:Terminal.Gui.App.IRunnable.IsModal>** - True when runnable is at top of stack (capturing all input)
 - **`Result`** - Typed result value set before stopping
 
@@ -345,9 +345,9 @@ public interface IApplication
 **Stack Behavior:**
 
 - Push: [Begin()](xref:Terminal.Gui.App.IApplication.Begin*) adds to top of stack
-- Pop: [End()](xref:Terminal.Gui.App.IApplication.End*) removes from stack
+- Pop: [End()](xref:Terminal.Gui.App.IApplication.End*) removes from stack; a session ended beneath the top stays until the sessions above it end
 - Peek: <xref:Terminal.Gui.App.IApplication.TopRunnable> returns current modal runnable
-- All: <xref:Terminal.Gui.App.IApplication.SessionStack> enumerates all running sessions
+- All: <xref:Terminal.Gui.App.IApplication.SessionStack> enumerates session tokens; running ones have `token.Runnable is { IsRunning: true }`
 
 ## IApplication Interface
 

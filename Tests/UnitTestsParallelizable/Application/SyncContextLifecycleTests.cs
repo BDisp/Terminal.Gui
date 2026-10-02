@@ -292,6 +292,40 @@ public class SyncContextLifecycleTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void Dispose_AfterFinalSessionEndedOnWorker_RestoresCallerContext ()
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext marker = new ();
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext (marker);
+
+            IApplication app = Application.Create ();
+            app.Init (DriverRegistry.Names.ANSI);
+            SynchronizationContext appContext = ((ApplicationImpl)app).SynchronizationContext!;
+
+            using Runnable runnable = new ();
+            SessionToken token = app.Begin (runnable)!;
+
+            // A worker cannot change this thread's context, so the app context stays ambient here until Dispose.
+            Thread ender = new (() => app.End (token));
+            ender.Start ();
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+            Assert.Same (appContext, SynchronizationContext.Current);
+
+            app.Dispose ();
+
+            Assert.Same (marker, SynchronizationContext.Current);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (previous);
+        }
+    }
+
     // A continuation that captured the app context during a session can resume after the session
     // ends; with no loop pumping (and the app still Initialized), it must not be stranded.
     [Fact]

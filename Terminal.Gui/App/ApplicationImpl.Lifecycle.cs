@@ -319,12 +319,12 @@ internal partial class ApplicationImpl
         ResetHasEndedSession ();
 
         // === 9. Reset synchronization context ===
-        // If this app's context is still the thread's ambient context, clear it so later
-        // async/await does not capture a context that no longer processes callbacks (#1084).
-        // A foreign ambient context (the caller's own) is left untouched.
+        // If this app's context is still the thread's ambient context (a session is still running, or the final End
+        // ran on another thread), restore the caller's context so later async/await does not capture a context that
+        // no longer processes callbacks (#1084, #5636). A foreign ambient context is left untouched.
         if (SynchronizationContext is { } ownContext && System.Threading.SynchronizationContext.Current == ownContext)
         {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (null);
+            System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
         }
 
         _callerSynchronizationContext = null;
