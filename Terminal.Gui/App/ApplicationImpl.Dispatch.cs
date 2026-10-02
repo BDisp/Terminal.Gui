@@ -4,8 +4,10 @@ internal partial class ApplicationImpl
 {
     // Teardown publishes first (owner closed, last session stopped, or dispatch stopping), then releases queued work
     // under _dispatchLock. Queued work is claimed under the same lock and only while CanStartUiWork holds and its owner,
-    // if any, is running, so each item either starts on the UI thread or is released by teardown, never both and never
-    // neither. Work that cannot start yet stays queued.
+    // if any, is running. A claim between the publish and the release either read the state from before the publish,
+    // so it is ordered before teardown, or sees the stop and leaves the item for the release. So each item either
+    // starts on the UI thread or is released by teardown, never both and never neither. Work that cannot start yet
+    // stays queued. End publishes under _sessionStackLock alone, so IRunnable state changes never block dispatch.
     private readonly Lock _dispatchLock = new ();
     private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
     private readonly LinkedList<PostedCallback> _postedCallbacks = new ();
