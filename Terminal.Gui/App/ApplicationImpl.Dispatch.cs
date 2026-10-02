@@ -3,8 +3,9 @@ namespace Terminal.Gui.App;
 internal partial class ApplicationImpl
 {
     // Teardown publishes first (owner closed, last session stopped, or dispatch stopping), then releases queued work
-    // under _dispatchLock. Queued work is claimed under the same lock and only while CanStartUiWork holds, so each item
-    // either starts on the UI thread or is released by teardown, never both and never neither.
+    // under _dispatchLock. Queued work is claimed under the same lock and only while CanStartUiWork holds and its owner,
+    // if any, is running, so each item either starts on the UI thread or is released by teardown, never both and never
+    // neither. Work that cannot start yet stays queued.
     private readonly Lock _dispatchLock = new ();
     private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
     private readonly LinkedList<PostedCallback> _postedCallbacks = new ();
@@ -136,7 +137,8 @@ internal partial class ApplicationImpl
     {
         lock (_dispatchLock)
         {
-            if (!CanStartUiWork || operation.Owner is { IsDispatchClosed: true } or { Runnable: null } || !operation.TryStart ())
+            // An owner still inside Begin (for example, in SessionBegun) is not active yet; its work waits for a later drain.
+            if (!CanStartUiWork || operation.Owner is { IsDispatchActive: false } || !operation.TryStart ())
             {
                 return false;
             }

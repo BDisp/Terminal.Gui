@@ -52,10 +52,16 @@ internal sealed class UiDispatchOperation
 
     internal void Execute ()
     {
-        if (_cancellationToken.IsCancellationRequested || !_app.TryStartDispatch (this))
+        if (_cancellationToken.IsCancellationRequested)
         {
             Cancel ();
 
+            return;
+        }
+
+        // Work that cannot start now stays queued until a later drain starts it or teardown cancels it.
+        if (!_app.TryStartDispatch (this))
+        {
             return;
         }
 

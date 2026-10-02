@@ -48,7 +48,9 @@ public static class ApplicationDispatchExtensions
     /// <returns>A task that reports completion, cancellation, or the action's exception.</returns>
     /// <remarks>
     ///     The owner may be an outer session while an inner modal is running. Ending the owner cancels its pending
-    ///     dispatches; ending another session does not. An owner that has already ended yields a canceled task.
+    ///     dispatches; ending another session does not. An owner that has already ended yields a canceled task. An owner
+    ///     that has not started running yet, such as one reported by <see cref="IApplication.SessionBegun"/>, runs the
+    ///     action on a later main-loop iteration after it starts.
     ///     After the final session ends or disposal begins, a canceled await may resume on a thread-pool thread.
     /// </remarks>
     /// <inheritdoc cref="InvokeAsync(IApplication, Action, CancellationToken)" path="/exception"/>

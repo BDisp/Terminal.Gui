@@ -23,6 +23,9 @@ public class SessionToken
         set => Volatile.Write (ref _isDispatchClosed, value);
     }
 
+    /// <summary>Whether owned dispatches may start: the session is running and has not begun to end.</summary>
+    internal bool IsDispatchActive => !IsDispatchClosed && Runnable is { IsRunning: true };
+
     /// <summary>
     ///     The result of the session. Typically set by the runnable in <see langword="IRunnable.IsRunningChanged"/>
     /// </summary>

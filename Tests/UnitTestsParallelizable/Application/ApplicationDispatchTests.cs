@@ -550,6 +550,83 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void NestedSessionBegunHandler_DefersOwnedDispatchUntilOwnerIsRunning ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        Task? dispatch = null;
+        bool? ownerRunningInCallback = null;
+        EventHandler<SessionTokenEventArgs> handler = (_, args) =>
+        {
+            dispatch = app.InvokeAsync (args.State, () => ownerRunningInCallback = inner.IsRunning);
+
+            // The outer session lets UI work start here, but the inner owner is not running yet.
+            PumpUiDispatches (app);
+        };
+        app.SessionBegun += handler;
+
+        try
+        {
+            SessionToken innerToken = app.Begin (inner)!;
+            Assert.NotNull (dispatch);
+            Assert.False (dispatch.IsCompleted);
+            Assert.Null (ownerRunningInCallback);
+
+            PumpUiDispatches (app);
+
+            Assert.True (dispatch.IsCompletedSuccessfully);
+            Assert.True (ownerRunningInCallback);
+            app.End (innerToken);
+        }
+        finally
+        {
+            app.SessionBegun -= handler;
+            app.End (outerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void NestedSessionBegunHandler_OwnedDispatchCannotEndOwnerBeforeItRuns ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable outer = new ();
+        Runnable inner = new ();
+        SessionToken outerToken = app.Begin (outer)!;
+        Task? dispatch = null;
+        EventHandler<SessionTokenEventArgs> handler = (_, args) => dispatch = app.InvokeAsync (args.State, () => app.End (args.State));
+        app.SessionBegun += handler;
+
+        try
+        {
+            SessionToken innerToken = app.Begin (inner)!;
+            Assert.True (inner.IsRunning);
+            Assert.Same (inner, innerToken.Runnable);
+
+            PumpUiDispatches (app);
+
+            Assert.True (dispatch!.IsCompletedSuccessfully);
+            Assert.False (inner.IsRunning);
+            Assert.Null (innerToken.Runnable);
+            Assert.Same (outer, app.TopRunnable);
+        }
+        finally
+        {
+            app.SessionBegun -= handler;
+            app.End (outerToken);
+            inner.Dispose ();
+            outer.Dispose ();
+            app.Dispose ();
+        }
+    }
+
     [Fact]
     public void EndingFinalSession_CancelsApplicationDispatch ()
     {
@@ -810,6 +887,12 @@ public class ApplicationDispatchTests
 
             Assert.True (first.IsCompletedSuccessfully);
             Assert.True (stopPublished.IsSet);
+            Assert.False (ownedRan);
+
+            // The closed owner's work stays queued until its End releases it.
+            Assert.False (owned.IsCompleted);
+            finishStopping.Set ();
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
             Assert.False (ownedRan);
             Assert.True (owned.IsCanceled);
         }
