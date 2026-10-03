@@ -6,25 +6,38 @@ namespace Terminal.Gui.Drivers;
 ///     PERF: UTF-8 byte buffer — replaces StringBuilder in the output hot path.
 ///     ANSI sequences (CSI/SGR/OSC) are pure ASCII and appended via fast path (no encoding).
 ///     Unicode graphemes are UTF-8 encoded on append.
-///     Zero allocation in stable state (internal buffer grows as needed).
+///     Reuses its backing array at stable sizes; other rendering work can still allocate.
 /// </summary>
-public sealed class Utf8Buffer
+internal sealed class Utf8Buffer
 {
+    internal const int RetainedCapacityLimit = 1024 * 1024;
+
     private byte [] _buffer = new byte [256];
     private int _length;
 
     /// <summary>Gets the number of bytes written.</summary>
     public int Length => _length;
 
+    internal int Capacity => _buffer.Length;
+
     /// <summary>Resets the buffer for reuse without releasing the backing array.</summary>
     public void Clear () => _length = 0;
+
+    /// <summary>Releases an unusually large backing array after a frame is sent.</summary>
+    public void TrimExcess ()
+    {
+        if (_length == 0 && _buffer.Length > RetainedCapacityLimit)
+        {
+            _buffer = new byte [256];
+        }
+    }
 
     /// <summary>Gets a read-only span over the written bytes.</summary>
     public ReadOnlySpan<byte> AsSpan () => _buffer.AsSpan (0, _length);
 
     /// <summary>
-    ///     Appends an ASCII string as raw bytes. Caller must ensure <paramref name="text"/> is pure ASCII.
-    ///     No UTF-8 encoding is performed — each char is truncated to byte directly.
+    ///     Appends ASCII as raw bytes. Non-ASCII input falls back to UTF-8 encoding
+    ///     instead of truncating characters.
     /// </summary>
     public void AppendAscii (string text)
     {
@@ -34,19 +47,39 @@ public sealed class Utf8Buffer
             return;
         }
 
-        EnsureCapacity (len);
-
-        for (int i = 0; i < len; i++)
+        if (len <= 32)
         {
-            _buffer [_length + i] = (byte)text [i];
+            EnsureCapacity (len);
+
+            for (int index = 0; index < len; index++)
+            {
+                char current = text [index];
+
+                if (current >= 0x80)
+                {
+                    Append (text.AsSpan ());
+                    return;
+                }
+
+                _buffer [_length + index] = (byte)current;
+            }
+
+            _length += len;
+            return;
         }
 
-        _length += len;
+        if (!Ascii.IsValid (text))
+        {
+            Append (text.AsSpan ());
+            return;
+        }
+
+        AppendKnownAscii (text);
     }
 
     /// <summary>
     ///     Appends a string, auto-detecting ASCII vs Unicode.
-    ///     ASCII strings use a fast truncation path; Unicode strings are UTF-8 encoded.
+    ///     ASCII strings use a direct byte path; Unicode strings are UTF-8 encoded.
     /// </summary>
     public void Append (string text)
     {
@@ -56,26 +89,13 @@ public sealed class Utf8Buffer
             return;
         }
 
-        // Fast check: if all chars < 0x80, use ASCII path (no encoding)
-        bool allAscii = true;
-
-        for (int i = 0; i < len; i++)
+        if (len == 1 && text [0] < 0x80)
         {
-            if (text [i] >= 0x80)
-            {
-                allAscii = false;
-
-                break;
-            }
-        }
-
-        if (allAscii)
-        {
-            AppendAscii (text);
+            AppendByte ((byte)text [0]);
             return;
         }
 
-        Append (text.AsSpan ());
+        AppendAscii (text);
     }
 
     /// <summary>
@@ -108,37 +128,32 @@ public sealed class Utf8Buffer
     /// </summary>
     public void AppendInt (int value)
     {
-        if (value == 0)
+        uint magnitude = value < 0 ? (uint)-(long)value : (uint)value;
+        uint remaining = magnitude;
+        int digits = 1;
+
+        while (remaining >= 10)
         {
-            AppendByte ((byte)'0');
-            return;
+            remaining /= 10;
+            digits++;
         }
+
+        int width = digits + (value < 0 ? 1 : 0);
+        EnsureCapacity (width);
+        int position = _length + width;
+
+        do
+        {
+            _buffer [--position] = (byte)('0' + magnitude % 10);
+            magnitude /= 10;
+        } while (magnitude > 0);
 
         if (value < 0)
         {
-            AppendByte ((byte)'-');
-            value = -value;
+            _buffer [--position] = (byte)'-';
         }
 
-        int temp = value;
-        int digitCount = 0;
-
-        while (temp > 0)
-        {
-            digitCount++;
-            temp /= 10;
-        }
-
-        EnsureCapacity (digitCount);
-        int start = _length + digitCount;
-
-        while (value > 0)
-        {
-            _buffer [--start] = (byte)('0' + value % 10);
-            value /= 10;
-        }
-
-        _length += digitCount;
+        _length += width;
     }
 
     /// <summary>
@@ -173,13 +188,12 @@ public sealed class Utf8Buffer
 
     private void EnsureCapacity (int additional)
     {
-        if (_length + additional <= _buffer.Length)
+        long required = (long)_length + additional;
+
+        if (required <= _buffer.Length)
         {
             return;
         }
-
-        // Guard against int overflow: if required size exceeds Array.MaxLength, throw instead of hanging.
-        long required = (long)_length + additional;
 
         if (required > Array.MaxLength)
         {
@@ -200,5 +214,11 @@ public sealed class Utf8Buffer
         }
 
         Array.Resize (ref _buffer, (int)newSize);
+    }
+
+    private void AppendKnownAscii (ReadOnlySpan<char> text)
+    {
+        EnsureCapacity (text.Length);
+        _length += Encoding.ASCII.GetBytes (text, _buffer.AsSpan (_length));
     }
 }

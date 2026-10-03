@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 namespace Terminal.Gui.Drivers;
@@ -14,7 +15,7 @@ namespace Terminal.Gui.Drivers;
 ///         Console APIs. Ensure <c>ENABLE_PROCESSED_OUTPUT</c> is set when using this flag
 ///     </para>
 /// </remarks>
-internal sealed class WindowsVTOutputHelper : IDisposable
+internal sealed partial class WindowsVTOutputHelper : IDisposable
 {
     #region P/Invoke Declarations
 
@@ -30,8 +31,13 @@ internal sealed class WindowsVTOutputHelper : IDisposable
     [DllImport ("kernel32.dll")]
     private static extern uint GetLastError ();
 
-    [DllImport ("kernel32.dll")]
-    public static extern bool WriteFile (nint hConsoleHandle, byte [] lpBuffer, uint nNumberOfBytesToWrite, out uint lpNumberOfBytesWritten, nint lpOverlapped);
+    [LibraryImport ("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs (UnmanagedType.Bool)]
+    private static partial bool WriteFile (nint hConsoleHandle,
+                                           ReadOnlySpan<byte> lpBuffer,
+                                           uint nNumberOfBytesToWrite,
+                                           out uint lpNumberOfBytesWritten,
+                                           nint lpOverlapped);
 
     [DllImport ("kernel32.dll", SetLastError = true)]
     [return: MarshalAs (UnmanagedType.Bool)]
@@ -42,10 +48,10 @@ internal sealed class WindowsVTOutputHelper : IDisposable
     private uint _originalConsoleMode;
     private bool _disposed;
 
-    // PERF: Reusable buffers to avoid per-write allocations (string + byte[]).
-    // Grows as needed; stable-state zero-allocation writes.
-    private char []? _charBuffer;
-    private byte []? _byteBuffer;
+    internal delegate bool WriteFileDelegate (ReadOnlySpan<byte> bytes, out uint written, out int error);
+    private readonly WriteFileDelegate? _writer;
+
+    internal WindowsVTOutputHelper (WriteFileDelegate? writer = null) => _writer = writer;
 
     /// <summary>
     ///     Gets whether VTS output mode was successfully enabled.
@@ -172,55 +178,44 @@ internal sealed class WindowsVTOutputHelper : IDisposable
         _disposed = true;
     }
 
-    public void Write (StringBuilder output)
-    {
-        int charLen = output.Length;
-        if (charLen == 0) return;
+    public void Write (StringBuilder output) => Write (Encoding.UTF8.GetBytes (output.ToString ()));
 
-        // Ensure char buffer is large enough
-        if (_charBuffer is null || _charBuffer.Length < charLen)
-        {
-            _charBuffer = new char [charLen];
-        }
-
-        // Copy StringBuilder contents to reusable char[] — avoids allocating a string
-        output.CopyTo (0, _charBuffer, 0, charLen);
-
-        // Calculate UTF-8 byte count
-        int byteLen = Encoding.UTF8.GetByteCount (_charBuffer, 0, charLen);
-
-        // Ensure byte buffer is large enough
-        if (_byteBuffer is null || _byteBuffer.Length < byteLen)
-        {
-            _byteBuffer = new byte [byteLen];
-        }
-
-        // Encode to reusable byte[] — avoids allocating a new byte[] each call
-        Encoding.UTF8.GetBytes (_charBuffer, 0, charLen, _byteBuffer, 0);
-
-        WriteFile (OutputHandle, _byteBuffer, (uint)byteLen, out _, nint.Zero);
-    }
-
-    /// <summary>
-    ///     PERF: Writes pre-encoded UTF-8 bytes directly to the console via WriteFile.
-    ///     Zero conversion — bytes are written as-is.
-    /// </summary>
+    /// <summary>Writes UTF-8 directly, retrying short writes without copying their tail.</summary>
     public void Write (ReadOnlySpan<byte> utf8)
     {
-        if (utf8.IsEmpty)
+        while (!utf8.IsEmpty)
         {
-            return;
+            uint written;
+            int error;
+            bool succeeded;
+
+            if (_writer is { })
+            {
+                succeeded = _writer (utf8, out written, out error);
+            }
+            else
+            {
+                succeeded = WriteFile (OutputHandle, utf8, (uint)utf8.Length, out written, nint.Zero);
+                error = Marshal.GetLastWin32Error ();
+            }
+
+            if (!succeeded)
+            {
+                if (error == 0)
+                {
+                    throw new IOException ("WriteFile failed without an error code.");
+                }
+
+                throw new Win32Exception (error);
+            }
+
+            if (written == 0 || written > utf8.Length)
+            {
+                throw new IOException ($"WriteFile reported {written} of {utf8.Length} bytes.");
+            }
+
+            utf8 = utf8 [(int)written..];
         }
-
-        // Ensure byte buffer is large enough
-        if (_byteBuffer is null || _byteBuffer.Length < utf8.Length)
-        {
-            _byteBuffer = new byte [utf8.Length];
-        }
-
-        utf8.CopyTo (_byteBuffer);
-
-        WriteFile (OutputHandle, _byteBuffer, (uint)utf8.Length, out _, nint.Zero);
     }
 
     /// <summary>
