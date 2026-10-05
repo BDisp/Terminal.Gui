@@ -9,9 +9,43 @@ Terminal.Gui applications run on a single main thread with an event loop that pr
 Terminal.Gui follows the standard UI toolkit pattern where **all UI operations must happen on the main thread**. Attempting to modify views or their properties from background threads will result in undefined behavior and potential crashes.
 
 ### The Golden Rule
-> Always use `App?.Invoke()` (from within a View) or `app.Invoke()` (with an IApplication instance) to update the UI from background threads.
+> Always use `App?.Invoke ()` (from within a View), `app.Invoke ()`, or `app.InvokeAsync ()` to update the UI from background threads.
 
 ## Background Operations
+
+### Await a UI update owned by a session
+
+To wait until a background result has been applied to the UI, call `app.InvokeAsync`. Pass the session token when the callback references views owned by a runnable. The token can be obtained from `app.Begin (...)` or from `app.SessionBegun` after `app.Run (...)` starts the session.
+
+```csharp
+// Called while the window's session is running. It may have ended before this lookup.
+SessionToken? owner = app.SessionStack?.FirstOrDefault (token => ReferenceEquals (token.Runnable, window));
+if (owner is null)
+{
+    return;
+}
+
+try
+{
+    await Task.Run (async () =>
+    {
+        string result = await LoadDataAsync ().ConfigureAwait (false);
+        await app.InvokeAsync (owner, () => statusLabel.Text = result).ConfigureAwait (false);
+    });
+}
+catch (OperationCanceledException)
+{
+    // The session or request ended before the UI update could run.
+}
+catch (NotInitializedException)
+{
+    // The application shut down before the UI update was requested.
+}
+```
+
+`InvokeAsync` completes after the callback runs on the UI thread. Queued dispatches are independent of user timers, so `TimedEvents.Remove` and `TimedEvents.StopAll` do not discard them. A canceled token, an ended owner session, the end of the final session, or application disposal cancels a callback that has not started. An `OperationCanceledException` carrying the canceled caller token also cancels the task when thrown by a running callback. Other callback exceptions fault the returned task; they do not reach the main-loop error handler, so await or inspect the task. A UI-thread call during a running session executes immediately and returns an already completed, canceled, or faulted task; an owned call whose session has not started running yet (for example, from `SessionBegun`) runs after that session starts. To cancel a specific request, pass its `CancellationToken` as the final argument. Custom `IApplication` implementations can support these extensions by implementing `IApplicationAsyncDispatcher`. The existing `Invoke` overloads remain available for calls that do not need completion or cancellation.
+
+Calls accepted before shutdown return tasks that are canceled if still pending. After the final session ends or disposal begins, an `await` continuation that has not yet run on the UI loop, including one queued just before, resumes on a thread-pool thread because the loop is no longer pumping. Check cancellation before accessing views after such an await. Calls after shutdown begins throw `NotInitializedException`. Dispatches made between two completed sessions are canceled; to queue work for the next session, start that session first. Dispatches queued after `Init` but before the first session wait for that first session.
 
 ### Using async/await (Recommended)
 
@@ -144,7 +178,7 @@ public class ClockView : View
 
 - **Always remove timers** when disposing views to prevent memory leaks
 - **Return `true`** from timer callbacks to continue, `false` to stop
-- **Keep timer callbacks fast** - they run on the main thread
+- **Keep timer callbacks fast** - the application loop runs them on the main thread, while direct `RunTimers` calls execute on the calling thread
 - **Use appropriate intervals** - too frequent updates can impact performance
 
 

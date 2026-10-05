@@ -75,7 +75,11 @@ internal partial class ApplicationImpl
 
         CreateDriver (_driverName);
 
-        Initialized = true;
+        lock (_dispatchLock)
+        {
+            Volatile.Write (ref _dispatchStopping, false);
+            Initialized = true;
+        }
 
         RaiseInitializedChanged (this, new EventArgs<bool> (true));
         SubscribeDriverEvents ();
@@ -158,6 +162,10 @@ internal partial class ApplicationImpl
     /// </summary>
     private void DisposeCore ()
     {
+        // Publish shutdown and cancel pending dispatches before stopping the loop. Canceled awaiters
+        // can then resume without posting their continuations to a loop that will no longer pump.
+        StopDispatching ();
+
         // Stop the coordinator if running
         Coordinator?.Stop ();
 
@@ -226,6 +234,8 @@ internal partial class ApplicationImpl
         // e.g. see Issue #537
 
         Trace.Lifecycle (MainThreadId?.ToString (), "Shutdown");
+
+        StopDispatching ();
 
         // === 0. Stop all timers ===
         TimedEvents.StopAll ();
@@ -309,13 +319,15 @@ internal partial class ApplicationImpl
         ResetHasEndedSession ();
 
         // === 9. Reset synchronization context ===
-        // If this app's context is still the thread's ambient context, clear it so later
-        // async/await does not capture a context that no longer processes callbacks (#1084).
-        // A foreign ambient context (the caller's own) is left untouched.
+        // If this app's context is still the thread's ambient context (a session is still running, or the final End
+        // ran on another thread), restore the caller's context so later async/await does not capture a context that
+        // no longer processes callbacks (#1084, #5636). A foreign ambient context is left untouched.
         if (SynchronizationContext is { } ownContext && System.Threading.SynchronizationContext.Current == ownContext)
         {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (null);
+            System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
         }
+
+        _callerSynchronizationContext = null;
 
         // === 10. Unsubscribe from Application static property change events ===
         UnsubscribeApplicationEvents ();

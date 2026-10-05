@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using Terminal.Gui.Tracing;
 
 namespace Terminal.Gui.App;
@@ -14,8 +15,14 @@ internal partial class ApplicationImpl
     /// <inheritdoc/>
     public ConcurrentStack<SessionToken>? SessionStack { get; } = new ();
 
+    private IRunnable? _topRunnable;
+
     /// <inheritdoc/>
-    public IRunnable? TopRunnable { get; private set; }
+    public IRunnable? TopRunnable
+    {
+        get => Volatile.Read (ref _topRunnable);
+        private set => Volatile.Write (ref _topRunnable, value);
+    }
 
     /// <inheritdoc/>
     public View? TopRunnableView => TopRunnable as View;
@@ -108,6 +115,9 @@ internal partial class ApplicationImpl
 
     #region Session Lifecycle - Begin
 
+    // The ambient context from before the first running session installed this app's context.
+    private SynchronizationContext? _callerSynchronizationContext;
+
     /// <inheritdoc/>
     public SessionToken? Begin (IRunnable runnable)
     {
@@ -136,9 +146,13 @@ internal partial class ApplicationImpl
         // Set the application reference in the runnable
         runnable.SetApp (this);
 
-        // Set the synchronization context to MainLoopSyncContext for this application, saving the
-        // caller's context on the token so End can restore it (#5636).
-        token.PreviousSynchronizationContext = System.Threading.SynchronizationContext.Current;
+        // Make this app's MainLoopSyncContext ambient while sessions run. The first running session saves the
+        // caller's context so the last session to end can restore it (#5636).
+        if (!HasRunningSession && System.Threading.SynchronizationContext.Current != SynchronizationContext)
+        {
+            _callerSynchronizationContext = System.Threading.SynchronizationContext.Current;
+        }
+
         SynchronizationContext.SetSynchronizationContext (SynchronizationContext);
 
         // Ensure the mouse is ungrabbed
@@ -290,7 +304,11 @@ internal partial class ApplicationImpl
         }
         finally
         {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (previousContext);
+            // Once the last session has ended, End has restored the caller's context; do not reinstall this app's.
+            if (HasRunningSession || previousContext != SynchronizationContext)
+            {
+                System.Threading.SynchronizationContext.SetSynchronizationContext (previousContext);
+            }
         }
     }
 
@@ -436,40 +454,70 @@ internal partial class ApplicationImpl
     {
         ArgumentNullException.ThrowIfNull (token);
 
-        if (token.Runnable is null)
+        // Claim the session before the cancellable IsRunningChanging, so a concurrent or reentrant End returns instead
+        // of raising it again or tearing down ahead of a veto. Once teardown starts, the claim is never released.
+        if (token.Runnable is not { } runnable || !token.TryClaimEnd ())
         {
-            return; // Already ended
+            return; // Already ended or ending
         }
 
-        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()}");
+        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()}");
 
-        if (Popovers?.GetActivePopover () is { Visible: true } visiblePopover)
+        var stopping = false;
+
+        try
         {
-            ApplicationPopover.HideWithQuitCommand (visiblePopover);
+            if (Popovers?.GetActivePopover () is { Visible: true } visiblePopover)
+            {
+                ApplicationPopover.HideWithQuitCommand (visiblePopover);
+            }
+
+            // Get old IsRunning value (safe - cached value)
+            bool oldIsRunning = runnable.IsRunning;
+
+            // Raise IsRunningChanging OUTSIDE lock (true -> false) - can be canceled
+            // This is where Result should be extracted!
+            stopping = !runnable.RaiseIsRunningChanging (oldIsRunning, false);
+        }
+        finally
+        {
+            // Stopping was canceled or a handler threw; release the claim so a later End can stop this session.
+            if (!stopping)
+            {
+                token.ReleaseEndClaim ();
+            }
         }
 
-        IRunnable runnable = token.Runnable;
-
-        // Get old IsRunning value (safe - cached value)
-        bool oldIsRunning = runnable.IsRunning;
-
-        // Raise IsRunningChanging OUTSIDE lock (true -> false) - can be canceled
-        // This is where Result should be extracted!
-        if (runnable.RaiseIsRunningChanging (oldIsRunning, false))
+        if (!stopping)
         {
-            // Stopping was canceled - do not proceed with End
             return;
         }
 
-        bool wasModal = runnable.IsModal;
+        bool wasModal;
         IRunnable? previousRunnable = null;
 
         // CRITICAL SECTION - Atomic stack + cached state update
         lock (_sessionStackLock)
         {
-            // Pop token from SessionStack
-            if (wasModal && SessionStack?.TryPop (out SessionToken? popped) == true && popped == token)
+            // Close owned dispatch first, so no owned work starts once teardown is visible.
+            token.IsDispatchClosed = true;
+
+            // Read under the lock: a concurrent Begin moves IsModal to the session it pushes.
+            wasModal = runnable.IsModal;
+
+            // Pop only this token; popping first and comparing after would discard another session.
+            bool wasTop = wasModal && SessionStack?.TryPeek (out SessionToken? top) == true && top == token;
+
+            if (wasTop)
             {
+                SessionStack!.TryPop (out _);
+
+                // Discard sessions that ended while beneath this one so the nearest running session becomes top.
+                while (SessionStack?.TryPeek (out SessionToken? endedToken) == true && endedToken.Runnable is not { IsRunning: true })
+                {
+                    SessionStack.TryPop (out _);
+                }
+
                 // Restore previous top runnable
                 if (SessionStack?.TryPeek (out SessionToken? previousToken) == true && previousToken.Runnable is { })
                 {
@@ -483,61 +531,108 @@ internal partial class ApplicationImpl
             // Update cached state atomically - IsRunning and IsModal are now consistent
             runnable.SetIsRunning (false);
             runnable.SetIsModal (false);
+
+            if (wasTop)
+            {
+                TopRunnable = previousRunnable;
+            }
+            else
+            {
+                // A session ended beneath the top is no longer drawn; clear its cells on the next draw.
+                ClearScreenNextIteration = true;
+            }
         }
 
         // END CRITICAL SECTION - IsRunning/IsModal now thread-safe
 
+        EndSessionDispatches (token);
+
+        // The held claim now makes End a no-op, so finish teardown and raise every notification even if a handler
+        // throws. The first exception is rethrown after SessionEnded.
+        ExceptionDispatchInfo? failure = null;
+
         // Fire events AFTER lock released
         if (wasModal)
         {
-            runnable.RaiseIsModalChangedEvent (false);
+            Notify (() => runnable.RaiseIsModalChangedEvent (false));
         }
 
-        TopRunnable = null;
-
-        if (previousRunnable != null)
+        if (previousRunnable is { } restoredRunnable)
         {
-            TopRunnable = previousRunnable;
-            previousRunnable.RaiseIsModalChangedEvent (true);
+            Notify (() => restoredRunnable.RaiseIsModalChangedEvent (true));
         }
 
-        Mouse.UngrabMouse ();
-
-        runnable.RaiseIsRunningChangedEvent (false);
+        Notify (Mouse.UngrabMouse);
+        Notify (() => runnable.RaiseIsRunningChangedEvent (false));
 
         token.Result = runnable.Result;
 
         _result = token.Result;
 
-        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(token.Runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
+        Trace.Lifecycle (MainThreadId.ToString (), "End", $"{(runnable as Runnable)?.ToIdentifyingString ()} - Result: {_result ?? Glyphs.Null}");
 
-        // Clear the Runnable from the token
+        // Keep Runnable available to the state-change handlers, then clear it before SessionEnded.
         token.Runnable = null;
-        HasEndedSession = true;
-        SessionEnded?.Invoke (this, new SessionTokenEventArgs (token));
 
-        // Restore the ambient context the caller had at Begin, so an await after a directly-begun
-        // session cannot capture a context that is no longer pumping (#5636). For nested sessions
-        // the previous context is the same app context, so the outermost End restores the caller's.
-        if (System.Threading.SynchronizationContext.Current == SynchronizationContext)
+        // Keep this app's context ambient while any session still runs, including one that began first or one a
+        // handler above began. After the last running session, restore the caller's context so a later await cannot
+        // capture a context that is no longer pumping (#5636).
+        if (!HasRunningSession && System.Threading.SynchronizationContext.Current == SynchronizationContext)
         {
-            System.Threading.SynchronizationContext.SetSynchronizationContext (token.PreviousSynchronizationContext);
+            System.Threading.SynchronizationContext.SetSynchronizationContext (_callerSynchronizationContext);
+        }
+
+        Notify (() => SessionEnded?.Invoke (this, new SessionTokenEventArgs (token)));
+
+        failure?.Throw ();
+
+        return;
+
+        void Notify (Action raise)
+        {
+            try
+            {
+                raise ();
+            }
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture (exception);
+            }
         }
     }
+
+    private bool _hasEndedSession;
 
     /// <summary>
     ///     INTERNAL: Whether any session has ended. Once true (and no session is running), posts to
     ///     <see cref="MainLoopSyncContext"/> fall back to the thread pool instead of queueing onto a
     ///     loop that may never pump again.
     /// </summary>
-    internal bool HasEndedSession { get; private set; }
+    internal bool HasEndedSession
+    {
+        get => Volatile.Read (ref _hasEndedSession);
+        private set => Volatile.Write (ref _hasEndedSession, value);
+    }
+
+    /// <summary>Whether the session stack contains a running session, including one beneath the top runnable.</summary>
+    internal bool HasRunningSession => SessionStack?.Any (session => session.Runnable is { IsRunning: true }) == true;
 
     /// <summary>
     ///     INTERNAL: Whether work posted to <see cref="MainLoopSyncContext"/> can rely on the main
     ///     loop to pump it: the app is initialized, and either a session is running or none has run
     ///     to completion yet (posts made between Init and the first Run are pumped by that Run).
     /// </summary>
-    internal bool CanPumpPostedWork => Initialized && (TopRunnable is { IsRunning: true } || !HasEndedSession);
+    internal bool CanPumpPostedWork => Initialized
+                                       && !Volatile.Read (ref _dispatchStopping)
+                                       && (!HasEndedSession || HasRunningSession);
+
+    /// <summary>
+    ///     INTERNAL: Whether queued UI work may start on the calling thread now: it is the UI thread, dispatch is not
+    ///     stopping, and a session is running. Check it under <c>_dispatchLock</c> when claiming queued work.
+    /// </summary>
+    internal bool CanStartUiWork => MainThreadId == Thread.CurrentThread.ManagedThreadId
+                                    && !Volatile.Read (ref _dispatchStopping)
+                                    && HasRunningSession;
 
     internal void ResetHasEndedSession () => HasEndedSession = false;
 

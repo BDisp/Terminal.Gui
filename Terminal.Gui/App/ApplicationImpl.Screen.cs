@@ -128,7 +128,8 @@ internal partial class ApplicationImpl
             return;
         }
 
-        List<View?> views = [.. SessionStack.Select (r => r.Runnable! as View)!];
+        // A session ended beneath the top stays on the stack without a runnable until the sessions above it end.
+        List<View?> views = [.. SessionStack.Select (r => r.Runnable).OfType<View> ()];
 
         if (Popovers?.GetActivePopover () is View { Visible: true, NeedsLayout: true } visiblePopoverNeedingLayout)
         {
