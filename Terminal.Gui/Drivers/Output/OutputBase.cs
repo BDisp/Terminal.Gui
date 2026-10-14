@@ -168,6 +168,7 @@ public abstract class OutputBase
     /// </remarks>
     public virtual void Write (IOutputBuffer buffer)
     {
+        Rectangle [] clearedInlineSixels = GetClearedInlineSixels (buffer);
         OutputDirtyState dirtyState = new (buffer, ref _dirtyChanges);
         _clearLastOutputPending = true;
         _kittyImagesTouchedThisFrame.Clear ();
@@ -188,6 +189,7 @@ public abstract class OutputBase
 
             WriteFrame (buffer, ref dirtyState);
             FlushFrame ();
+            _inlineSixelPlacements.ExceptWith (clearedInlineSixels);
             _recoverOutputState = false;
             _kittyDeletesToRetry.Clear ();
         }
@@ -206,6 +208,71 @@ public abstract class OutputBase
     private int []? _dirtyChanges;
     private readonly HashSet<int> _kittyImagesTouchedThisFrame = [];
     private readonly HashSet<int> _kittyDeletesToRetry = [];
+
+    internal void ResetInlineTextState ()
+    {
+        _redrawTextStyle = TextStyle.None;
+        _lastUrl = null;
+    }
+
+    // Retain emitted Sixel areas until a successful dense text repaint has erased them.
+    // Legacy queued Sixels have no cell dimensions, so their placement cannot be proven cleared.
+    private readonly HashSet<Rectangle> _inlineSixelPlacements = [];
+    private bool _inlineUntrackedSixel;
+
+    private void TrackInlineSixelPlacement (Rectangle rectangle)
+    {
+        if (_inlineUntrackedSixel)
+        {
+            return;
+        }
+        // Bound tracking even for a long-lived image animation that never requests printing.
+        if (_inlineSixelPlacements.Count >= 1024)
+        {
+            _inlineUntrackedSixel = true;
+            _inlineSixelPlacements.Clear ();
+            return;
+        }
+        int origin = (this as AnsiOutput)?.AppScreenGetter?.Invoke ().Y ?? 0;
+        _inlineSixelPlacements.Add (rectangle with { Y = rectangle.Y + origin });
+    }
+
+    private Rectangle [] GetClearedInlineSixels (IOutputBuffer buffer)
+    {
+        if (_inlineSixelPlacements.Count == 0 || !_sixels.IsEmpty)
+        {
+            return [];
+        }
+        IReadOnlyList<Rectangle> rasterRectangles = GetRasterCellRectangles (buffer);
+        int origin = (this as AnsiOutput)?.AppScreenGetter?.Invoke ().Y ?? 0;
+        return _inlineSixelPlacements.Where (IsRepainted).ToArray ();
+
+        bool IsRepainted (Rectangle physicalRectangle)
+        {
+            Rectangle rectangle = physicalRectangle with { Y = physicalRectangle.Y - origin };
+            if (rasterRectangles.Any (active => active.IntersectsWith (rectangle)))
+            {
+                return false;
+            }
+            if (rectangle.X < 0 || rectangle.Y < 0 || rectangle.Right > buffer.Cols || rectangle.Bottom > buffer.Rows || buffer.Contents is null)
+            {
+                return false;
+            }
+            for (int row = rectangle.Y; row < rectangle.Bottom; row++)
+                for (int column = rectangle.X; column < rectangle.Right; column++)
+                {
+                    if (!buffer.Contents [row, column].IsDirty)
+                    {
+                        return false;
+                    }
+                }
+            return true;
+        }
+    }
+
+    internal bool HasInlineRasterState (IOutputBuffer buffer) =>
+        buffer.GetRasterImages ().Count > 0 || !_sixels.IsEmpty || _placedKittyImageIds.Count > 0
+        || _kittyCurrentImageId.Count > 0 || _kittyDeletesToRetry.Count > 0 || _inlineUntrackedSixel || _inlineSixelPlacements.Count > 0;
 
     // Raw driver writes can also fail midway through an OSC/DCS control string.
     internal void InvalidatePhysicalState (IOutputBuffer buffer)
@@ -442,6 +509,10 @@ public abstract class OutputBase
             }
 
             SetCursorPositionImpl (s.ScreenPosition.X, s.ScreenPosition.Y);
+            if (this is AnsiOutput { AppModel: AppModel.Inline })
+            {
+                _inlineUntrackedSixel = true;
+            }
             WriteEncodedString (s.SixelData);
             s.IsDirty = false;
         }
@@ -1237,6 +1308,10 @@ public abstract class OutputBase
                     _kittyImagesTouchedThisFrame.Add (imageId);
                 }
 
+                if (!UseKittyGraphics && this is AnsiOutput { AppModel: AppModel.Inline })
+                {
+                    TrackInlineSixelPlacement (visibleCells);
+                }
                 WriteEncodedString (GetRasterImageData (command, visibleCells, pixels, imageId));
 
                 if (trackKitty)

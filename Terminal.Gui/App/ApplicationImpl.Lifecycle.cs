@@ -77,6 +77,13 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
+            _inlineOutputGeneration++;
+            _inlineOutputUnits = 0;
+            _inlineOutputOutstanding = 0;
+            _inlineOutputFailure = null;
+            _inlineScreenSized = false;
+            _inlineOriginEstablished = false;
+            _screen = null;
             Volatile.Write (ref _dispatchStopping, false);
             Initialized = true;
         }

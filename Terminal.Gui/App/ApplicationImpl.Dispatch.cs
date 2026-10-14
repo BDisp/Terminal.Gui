@@ -177,6 +177,7 @@ internal partial class ApplicationImpl
             }
         }
 
+        EndInlineOutput (HasRunningSession ? owner : null);
         CancelAndRelease (pending, posted);
     }
 
@@ -192,6 +193,7 @@ internal partial class ApplicationImpl
             posted = TakePostedCallbacks ();
         }
 
+        EndInlineOutput ();
         CancelAndRelease (pending, posted);
     }
 
@@ -219,7 +221,7 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
-            runNow = CanStartUiWork;
+            runNow = CanStartUiWork && !_settlingInlineOutput;
 
             if (!runNow && CanPumpPostedWork)
             {

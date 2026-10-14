@@ -66,7 +66,11 @@ internal partial class ApplicationImpl
 
         ScreenChanged?.Invoke (this, new EventArgs<Rectangle> (screen));
 
-        foreach (SessionToken t in SessionStack!)
+        if (SessionStack is null || !Initialized || _dispatchStopping)
+        {
+            return;
+        }
+        foreach (SessionToken t in SessionStack)
         {
             if (t.Runnable is View runnableView)
             {
@@ -82,6 +86,10 @@ internal partial class ApplicationImpl
 
     private void Driver_SizeChanged (object? sender, SizeChangedEventArgs e)
     {
+        if (InlinePlacementLost)
+        {
+            return;
+        }
         Size newSize = e.Size ?? Size.Empty;
 
         if (AppModel == AppModel.Inline && _screen is { } screen)
@@ -95,7 +103,10 @@ internal partial class ApplicationImpl
                 driver.InlinePosition = Point.Empty;
 
                 // Clear the entire terminal
-                driver.WriteRaw ($"{EscSeqUtils.CSI}H{EscSeqUtils.CSI}2J");
+                if (!WriteInlineMovement ($"{EscSeqUtils.CSI}H{EscSeqUtils.CSI}2J"))
+                {
+                    return;
+                }
             }
 
             Screen = new Rectangle (0, 0, newSize.Width, screen.Height);
@@ -109,6 +120,47 @@ internal partial class ApplicationImpl
 
     /// <inheritdoc/>
     public void LayoutAndDraw (bool forceRedraw = false)
+    {
+        if (Coordinator is IInlineRenderCoordinator coordinator)
+        {
+            coordinator.WithRenderGate (() => LayoutAndDrawGuarded (forceRedraw));
+            return;
+        }
+        LayoutAndDrawGuarded (forceRedraw);
+    }
+
+    private void LayoutAndDrawGuarded (bool forceRedraw)
+    {
+        if (_layoutAndDrawActive || InlinePlacementLost)
+        {
+            return;
+        }
+        if (AppModel == AppModel.Inline && Driver is { } inlineDriver)
+        {
+            if (inlineDriver.Screen.Width <= 0 || inlineDriver.Screen.Height <= 0
+                || inlineDriver.AnsiStartupGate is { IsReady: false } && !ForceInlinePosition.HasValue)
+            {
+                return;
+            }
+            if (!_inlineOriginEstablished)
+            {
+                _inlineOriginEstablished = true;
+                inlineDriver.InlinePosition = ForceInlinePosition ?? new Point (0, (Coordinator as IInlineRenderCoordinator)?.InitialCursorRow ?? 0);
+            }
+        }
+        _layoutAndDrawActive = true;
+        InlineOutputOperation? candidate = CaptureInlineOutput ();
+        try
+        {
+            LayoutAndDrawCore (forceRedraw, candidate);
+        }
+        finally
+        {
+            _layoutAndDrawActive = false;
+        }
+    }
+
+    private void LayoutAndDrawCore (bool forceRedraw, InlineOutputOperation? candidate)
     {
         Tracing.Trace.Draw ("ApplicationImpl", "Start", $"forceRedraw={forceRedraw}, Screen={Screen}, _inlineScreenSized={_inlineScreenSized}");
 
@@ -128,6 +180,10 @@ internal partial class ApplicationImpl
             return;
         }
 
+        IDriver? passDriver = Driver;
+        long passGeneration = _inlineOutputGeneration;
+        bool PassIsValid () => Initialized && !_dispatchStopping && Driver == passDriver && passGeneration == _inlineOutputGeneration && !InlinePlacementLost && HasRunningSession;
+
         // A session ended beneath the top stays on the stack without a runnable until the sessions above it end.
         List<View?> views = [.. SessionStack.Select (r => r.Runnable).OfType<View> ()];
 
@@ -145,6 +201,10 @@ internal partial class ApplicationImpl
         {
             // First layout pass uses full terminal to determine the view's desired height.
             View.Layout (views.ToArray ().Reverse ()!, Screen.Size);
+            if (!PassIsValid ())
+            {
+                return;
+            }
 
             View? topView = views.LastOrDefault (v => v is { });
             int viewHeight = topView?.Frame.Height ?? 0;
@@ -160,8 +220,14 @@ internal partial class ApplicationImpl
 
                 if (overflow > 0)
                 {
-                    Driver.WriteRaw (new string ('\n', overflow));
-                    Driver.WriteRaw ($"{EscSeqUtils.CSI}{overflow}A");
+                    if (!WriteInlineMovement (new string ('\n', overflow)))
+                    {
+                        return;
+                    }
+                    if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{overflow}A"))
+                    {
+                        return;
+                    }
                     cursorRow = Math.Max (0, cursorRow - overflow);
                 }
 
@@ -174,6 +240,10 @@ internal partial class ApplicationImpl
                 // Set App.Screen to the inline sub-rectangle. This resizes the output buffer
                 // to the inline region dimensions and stores the Y offset for cursor positioning.
                 Screen = new Rectangle (0, cursorRow, termWidth, availableHeight);
+                if (!PassIsValid ())
+                {
+                    return;
+                }
             }
 
             _inlineScreenSized = true;
@@ -186,6 +256,10 @@ internal partial class ApplicationImpl
         {
             // Layout with current Screen to get desired heights from Dim.Auto views.
             View.Layout (views.ToArray ().Reverse ()!, Screen.Size);
+            if (!PassIsValid ())
+            {
+                return;
+            }
 
             View? topView = views.LastOrDefault (v => v is { });
 
@@ -204,8 +278,14 @@ internal partial class ApplicationImpl
                 // Reserve the new rows by scrolling them into existence.
                 if (canGrowDown > 0)
                 {
-                    Driver.WriteRaw (new string ('\n', canGrowDown));
-                    Driver.WriteRaw ($"{EscSeqUtils.CSI}{canGrowDown}A");
+                    if (!WriteInlineMovement (new string ('\n', canGrowDown)))
+                    {
+                        return;
+                    }
+                    if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{canGrowDown}A"))
+                    {
+                        return;
+                    }
                 }
 
                 int remaining = extraRows - canGrowDown;
@@ -218,8 +298,14 @@ internal partial class ApplicationImpl
 
                     if (canScrollUp > 0)
                     {
-                        Driver.WriteRaw (new string ('\n', canScrollUp));
-                        Driver.WriteRaw ($"{EscSeqUtils.CSI}{canScrollUp}A");
+                        if (!WriteInlineMovement (new string ('\n', canScrollUp)))
+                        {
+                            return;
+                        }
+                        if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{canScrollUp}A"))
+                        {
+                            return;
+                        }
                     }
 
                     newY -= canScrollUp;
@@ -231,6 +317,10 @@ internal partial class ApplicationImpl
                 if (newHeight != Screen.Height)
                 {
                     Screen = new Rectangle (0, newY, Screen.Width, newHeight);
+                    if (!PassIsValid ())
+                    {
+                        return;
+                    }
 
                     // Terminal scrolling moved existing content — the output buffer's
                     // cached positions are stale. Force a full redraw so LineCanvas
@@ -241,8 +331,29 @@ internal partial class ApplicationImpl
             }
         }
 
+        if (DrainInlineOutput (candidate))
+        {
+            forceRedraw = true;
+            // ScreenChanged may end sessions, dispose, open a modal, or change geometry.
+            views = [.. SessionStack?.Select (token => token.Runnable).OfType<View> () ?? []];
+        }
+        if (!PassIsValid ())
+        {
+            return;
+        }
+
+        views = [.. SessionStack!.Select (token => token.Runnable).OfType<View> ()];
+        if (Popovers?.GetActivePopover () is View { Visible: true, NeedsLayout: true } currentPopover)
+        {
+            views.Insert (0, currentPopover);
+        }
+
         // Final layout with the definitive Screen.Size — all inline adjustments are done.
         bool neededLayout = View.Layout (views.ToArray ().Reverse ()!, Screen.Size);
+        if (!PassIsValid ())
+        {
+            return;
+        }
 
         // Draw
         bool needsDraw = forceRedraw || views.Any (v => v is { NeedsDraw: true } or { SubViewNeedsDraw: true });
@@ -289,6 +400,10 @@ internal partial class ApplicationImpl
             // changes) so the SuperView can be invalidated precisely instead of force-redrawing
             // the whole tree.
             View.Draw (views.ToArray ().Cast<View> (), forceRedraw);
+            if (!PassIsValid ())
+            {
+                return;
+            }
 
             // Release raster graphics (Sixel/Kitty) whose owning view is no longer rendered — hidden,
             // removed from the hierarchy, or on a runnable that has ended. They are emitted out-of-band

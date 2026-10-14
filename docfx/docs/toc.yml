@@ -18,6 +18,8 @@
   href: ansihandling.md
 - name: Application
   href: application.md
+- name: Printing Above an Inline Application
+  href: inline-output.md
 - name: Arrangement
   href: arrangement.md
 - name: Borders

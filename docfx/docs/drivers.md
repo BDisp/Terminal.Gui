@@ -533,3 +533,9 @@ See [Input Injection](input-injection.md) for:
 - Virtual time control details
 - Injection modes (Direct vs Pipeline)
 - Troubleshooting guide
+
+## Output above a live inline region
+
+To print completed styled text above an inline UI, await `app.PrintAboveAsync(...)`.
+See [Printing above an inline application](inline-output.md) for ordering, cancellation,
+supported output, and partial-write behavior.
