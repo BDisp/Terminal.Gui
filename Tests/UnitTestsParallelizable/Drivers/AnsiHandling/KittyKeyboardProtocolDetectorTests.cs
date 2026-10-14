@@ -33,12 +33,11 @@ public class KittyKeyboardProtocolDetectorTests
     public void Enable_DoesNotBlockStartupWhileConfirmingFlags ()
     {
         Mock<IDriver> driverMock = new (MockBehavior.Strict);
-        using AnsiOutput output = new ();
         AnsiStartupGate startupGate = new ();
         AnsiEscapeSequenceRequest? capturedRequest = null;
 
         driverMock.Setup (d => d.IsLegacyConsole).Returns (false);
-        driverMock.Setup (d => d.GetOutput ()).Returns (output);
+        driverMock.Setup (d => d.WriteRaw (It.IsAny<string> ()));
         driverMock.Setup (d => d.QueueAnsiRequest (It.IsAny<AnsiEscapeSequenceRequest> ()))
                   .Callback<AnsiEscapeSequenceRequest> (request => capturedRequest = request);
 
