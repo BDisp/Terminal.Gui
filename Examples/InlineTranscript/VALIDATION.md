@@ -46,10 +46,11 @@ To reproduce PTY assertions, follow [the example README](README.md). The optiona
 package is a test harness dependency and is not part of Terminal.Gui. `tuirec` alone does
 not answer CPR; its missing-CPR fallback capture cannot establish shell-output preservation.
 
-Windows ConPTY/Windows Terminal, conhost, a Linux PTY, real-terminal Unicode/font width
-agreement, and resize during physical output remain unvalidated here. Resize preservation
-is outside this PR; the existing resize clear/reset remains. These platform checks are
-required before treating the draft as ready for merge.
+Actual Windows Terminal/conhost window rendering, a Linux PTY, real-terminal
+Unicode/font width agreement, and resize during physical output remain
+unvalidated here. Resize preservation is outside this PR; the existing resize
+clear/reset remains. These platform checks are required before treating the
+draft as ready for merge.
 
 ## Copilot review follow-up: 2026-10-14
 
@@ -72,3 +73,29 @@ color-output failures above and the previously documented intermittent Windows c
 case. No new failing test names were observed. The attached macOS PTY/history check
 with redirected stdout also passed after the fix. Platform validation limits remain
 as described above.
+
+## Windows review follow-up: 2026-10-14
+
+Validated PR #5715 on Windows ARM64 with .NET SDK 10.0.401. The two new Copilot
+findings reproduced before the fix: a zero-height runnable allowed a queued
+message to print against the physical screen, and a throwing `ClearedContents`
+subscriber left the already-printed request incomplete. Focused regressions now
+verify zero-height deferral, no erase of preceding shell output, resumption after
+growth, successful task settlement, live redraw invalidation, and release of
+all 256 queue slots after the callback throws.
+
+Debug and Release solution builds passed with no new warnings in changed files.
+All 62 inline-output tests passed, as did the 33 nonparallel and 437 integration
+tests. The full parallel rerun reported 17,905 passed, 4 failed, and 16 skipped
+(17,925 total); the four failed methods also failed on the unchanged stacked
+base on this machine. One earlier full run exceeded the allocation test's 4 KB
+budget by 3,800 bytes; both isolated cases and the full rerun passed without a
+layout change.
+
+The inline transcript also passed a pywinpty/pyte history check through both
+Windows ConPTY and the legacy WinPTY bridge at 50x12, full-height 50x3, and
+1x1. Each run preserved two preceding shell sentinels and all 24 numbered
+messages once and in order. The submitted text was preserved at 50x12 and
+50x3; the redirected-stdout case emitted no terminal bytes to stdout. These
+checks do not inspect an actual Windows Terminal or conhost window. Linux PTY
+validation remains outstanding.

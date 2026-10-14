@@ -177,9 +177,12 @@ internal partial class ApplicationImpl
         {
             return false;
         }
-        Rectangle region = Screen;
+        if (!_inlineScreenSized || _screen is not { } region)
+        {
+            return false;
+        }
         Size terminal = Driver.Screen.Size;
-        if (!_inlineScreenSized || terminal.Width <= 0 || terminal.Height <= 0 || region.Width <= 0 || region.Height <= 0)
+        if (terminal.Width <= 0 || terminal.Height <= 0 || region.Width <= 0 || region.Height <= 0)
         {
             return false;
         }
@@ -228,13 +231,20 @@ internal partial class ApplicationImpl
         // Publish geometry before notifying user code; completed output cannot become unprinted on callback failure.
         _screen = region with { Y = newY };
         driver.InlinePosition = new Point (0, newY);
-        driver.ClearContents ();
-        foreach (View view in SessionStack!.Select (token => token.Runnable).OfType<View> ())
+        try
         {
-            view.SetNeedsDraw ();
+            foreach (View view in SessionStack!.Select (token => token.Runnable).OfType<View> ())
+            {
+                view.SetNeedsDraw ();
+            }
+            Popovers?.GetActivePopover ()?.SetNeedsDraw ();
+            driver.ClearContents ();
         }
-        Popovers?.GetActivePopover ()?.SetNeedsDraw ();
-        operation.Finish ();
+        finally
+        {
+            // Physical insertion already succeeded even if a redraw callback threw.
+            operation.Finish ();
+        }
         RaiseScreenChangedEvent (Screen);
         return true;
     }

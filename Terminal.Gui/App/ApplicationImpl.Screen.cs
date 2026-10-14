@@ -246,7 +246,8 @@ internal partial class ApplicationImpl
                 }
             }
 
-            _inlineScreenSized = true;
+            // A zero-height runnable has no owned terminal region; retry sizing after it grows.
+            _inlineScreenSized = availableHeight > 0;
         }
 
         // Inline mode: after initial setup, handle dynamic growth. If the view's desired height

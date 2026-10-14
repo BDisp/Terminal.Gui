@@ -254,6 +254,68 @@ public class ApplicationInlineOutputTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void ZeroHeightLiveRegionDefersPrintingAndPreservesShellOutputUntilGrowth ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _);
+        using Runnable view = new () { Width = Dim.Fill (), Height = 0 };
+        SessionToken owner = app.Begin (view)!;
+        app.LayoutAndDraw ();
+        bytes.Clear ();
+        bytes.Append ("SHELL BEFORE\r\n");
+        Task print = app.PrintAboveAsync (owner, "message", TestContext.Current.CancellationToken);
+
+        app.LayoutAndDraw ();
+
+        Assert.False (print.IsCompleted);
+        Assert.DoesNotContain ("message", bytes.ToString ());
+        Assert.DoesNotContain ($"{EscSeqUtils.CSI}2K", bytes.ToString ());
+        Assert.DoesNotContain ($"{EscSeqUtils.CSI}2J", bytes.ToString ());
+
+        view.Height = 2;
+        app.LayoutAndDraw ();
+
+        Assert.True (print.IsCompletedSuccessfully);
+        Assert.Equal (2, app.Screen.Height);
+        Assert.True (bytes.ToString ().IndexOf ("SHELL BEFORE", StringComparison.Ordinal) < bytes.ToString ().IndexOf ("message", StringComparison.Ordinal));
+        app.End (owner);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void ClearedContentsSubscriberFailureSettlesPrintedRequestAndReleasesCapacity ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using Runnable view = new () { Height = 2 };
+        SessionToken owner = app.Begin (view)!;
+        app.LayoutAndDraw ();
+        Task print = app.PrintAboveAsync (owner, "printed", TestContext.Current.CancellationToken);
+        EventHandler<EventArgs> throwOnClear = (_, _) => throw new InvalidOperationException ("clear callback");
+        app.Driver!.ClearedContents += throwOnClear;
+        try
+        {
+            Assert.Throws<InvalidOperationException> (() => app.LayoutAndDraw ());
+        }
+        finally
+        {
+            app.Driver.ClearedContents -= throwOnClear;
+        }
+
+        Assert.True (print.IsCompletedSuccessfully);
+        Assert.True (view.NeedsDraw);
+        List<Task> pending = [];
+        for (var i = 0; i < 256; i++)
+        {
+            pending.Add (app.PrintAboveAsync (owner, "x", TestContext.Current.CancellationToken));
+        }
+        app.LayoutAndDraw ();
+        Assert.True (pending [0].IsCompletedSuccessfully);
+        app.End (owner);
+        Assert.All (pending.Skip (1), task => Assert.True (task.IsCanceled));
+    }
+
     [Fact]
     public void CancellationAfterClaimCannotInterruptInsertion ()
     {

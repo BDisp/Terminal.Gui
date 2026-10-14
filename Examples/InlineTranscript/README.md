@@ -15,7 +15,9 @@ Each producer awaits insertion; terminal writes remain on the rendering thread.
 The accompanying [cast](InlineTranscript.cast) was recorded in a macOS PTY with native
 cursor-position replies and replayed into a history-aware terminal model. The numbered
 messages and both preceding shell sentinels occur once and in order. The live composer
-retains its reserved height. Windows ConPTY/conhost validation remains outstanding.
+retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
+[VALIDATION.md](VALIDATION.md); actual Windows Terminal/conhost window rendering
+remains outstanding.
 
 To reproduce the Unix PTY/history check after building Release:
 
