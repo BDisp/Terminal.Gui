@@ -74,22 +74,7 @@ public static class StringExtensions
 
         foreach (string grapheme in GraphemeHelper.GetGraphemes (str))
         {
-            // Get the maximum rune width within this grapheme cluster
-            int clusterWidth = grapheme.EnumerateRunes ()
-                                       .Sum (r =>
-                                             {
-                                                 int w = r.GetColumns ();
-
-                                                 return ignoreLessThanZero && w < 0 ? 0 : w;
-                                             });
-
-            // Clamp to realistic max display width
-            if (clusterWidth > 2)
-            {
-                clusterWidth = 2;
-            }
-
-            total += clusterWidth;
+            total += GraphemeHelper.GetGraphemeColumns (grapheme.AsSpan (), ignoreLessThanZero);
         }
 
         return total;

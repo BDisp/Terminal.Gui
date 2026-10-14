@@ -29,7 +29,7 @@ public partial class AnsiOutput
     {
         // Count before the first byte; retain only a single dense row while writing.
         int remaining = layout.CountRows (terminal.Width);
-        using IEnumerator<InlineOutputLine> rows = layout.Rows (terminal.Width).GetEnumerator ();
+        using IEnumerator<InlineOutputRow> rows = layout.Rows (terminal.Width).GetEnumerator ();
         int destination = region.Y;
         try
         {
@@ -85,7 +85,6 @@ public partial class AnsiOutput
                 StringBuilder output = new (EscSeqUtils.CSI_SetCursorPosition (start + i + 1, 1));
                 output.Append (EscSeqUtils.CSI_ResetAttributes);
                 Attribute? previous = null;
-                var columns = 0;
                 foreach (InlineOutputSpan span in rows.Current.Spans)
                 {
                     if (span.Attribute != previous)
@@ -98,10 +97,9 @@ public partial class AnsiOutput
                         previous = span.Attribute;
                     }
                     output.Append (span.Text);
-                    columns += Math.Max (0, span.Text.GetColumns ());
                 }
                 output.Append (EscSeqUtils.CSI_ResetAttributes);
-                output.Append (' ', terminal.Width - columns);
+                output.Append (' ', terminal.Width - rows.Current.Columns);
                 // Explicit CUP cancels pending autowrap even after an exact-width bottom row.
                 output.Append (EscSeqUtils.CSI_SetCursorPosition (start + i + 1, 1));
                 Write (output.ToString ().AsSpan ());

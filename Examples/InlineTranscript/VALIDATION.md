@@ -50,3 +50,25 @@ Windows ConPTY/Windows Terminal, conhost, a Linux PTY, real-terminal Unicode/fon
 agreement, and resize during physical output remain unvalidated here. Resize preservation
 is outside this PR; the existing resize clear/reset remains. These platform checks are
 required before treating the draft as ready for merge.
+
+## Copilot review follow-up: 2026-10-14
+
+Row counting now traverses cached text and grapheme widths without constructing rows,
+span objects, grapheme strings, or expanded tab cells. Rendering combines adjacent text
+with equal attributes, expands tabs in row-sized runs, and carries the measured column
+count into ANSI output so it does not segment the rendered text again. Counting and
+rendering reuse the same grapheme-width policy as `StringExtensions.GetColumns`.
+
+Maximum-payload regression tests cover both ASCII and tabs. After warming Unicode width
+caches, counting must allocate no more than 4 KB. Rendering 4,194,303 ASCII characters at
+4,096 columns produces 1,024 spans (one per physical row) with an allocation budget below
+12 MiB. Mixed styles, cross-span graphemes, empty spans, combining marks, wide glyphs,
+and tab wrapping remain covered.
+
+The updated inline-output suite passed all 60 tests. Debug and Release builds passed;
+nonparallel tests passed 33/33, and integration tests passed 437/437. The full parallel
+suite reported 17,909 passed, 5 failed and 17 skipped (17,931 total): the four known
+color-output failures above and the previously documented intermittent Windows clipping
+case. No new failing test names were observed. The attached macOS PTY/history check
+with redirected stdout also passed after the fix. Platform validation limits remain
+as described above.

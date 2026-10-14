@@ -49,7 +49,7 @@ Instead of embedding descriptions, it points to actual source files that agents 
 |Drivers/Input:{ConsoleInputSource.cs,IInput.cs,IInputProcessor.cs,IInputSource.cs,InputImpl.cs,InputProcessorImpl.cs,InputRecord.cs,ITestableInput.cs,TestInputSource.cs}
 |Drivers/Keyboard:{ConsoleKeyInfoExtensions.cs,ConsoleKeyMapping.cs,IKeyConverter.cs,KeyCode.cs,VK.cs}
 |Drivers/Mouse:{MouseButtonClickTracker.cs,MouseInterpreter.cs}
-|Drivers/Output:{IInlineOutput.cs,InlineOutputLayout.cs,IOutput.cs,IOutputBuffer.cs,OutputBase.cs,OutputBufferImpl.cs,OutputDirtyState.cs,RasterImageCommand.cs,Utf8Buffer.cs}
+|Drivers/Output:{IInlineOutput.cs,InlineOutputLayout.cs,InlineOutputRow.cs,IOutput.cs,IOutputBuffer.cs,OutputBase.cs,OutputBufferImpl.cs,OutputDirtyState.cs,RasterImageCommand.cs,Utf8Buffer.cs}
 |Drivers/TerminalEnvironment:{ColorCapabilityLevel.cs,TerminalColorCapabilities.cs,TerminalEnvironmentDetector.cs}
 |Drivers/UnixHelpers:{SuspendHelper.cs,UnixClipboard.cs,UnixIOHelper.cs,UnixRawModeHelper.cs,UnixTerminalHelper.cs}
 |Drivers/WindowsDriver:{ClipboardImpl.cs,CursorVisibility.cs,IWindowsInput.cs,WindowsComponentFactory.cs,WindowsConsole.cs,WindowsInput.cs,WindowsInputProcessor.cs,WindowsKeyboardLayout.cs,WindowsKeyConverter.cs,WindowsKeyHelper.cs,WindowsOutput.cs}

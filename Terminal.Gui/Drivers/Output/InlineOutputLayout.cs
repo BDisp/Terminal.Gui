@@ -1,17 +1,19 @@
+using System.Globalization;
+
 namespace Terminal.Gui.Drivers;
 
 // Immutable request preparation; enumerating physical rows uses only one row of scratch storage.
 internal sealed class InlineOutputLayout
 {
     internal const int MaximumUnits = 4 * 1024 * 1024;
-    private readonly InlineOutputLine [] _lines;
+    private readonly PreparedLine [] _lines;
     internal int Units { get; }
     internal bool IsEmpty => _lines.Length == 0;
 
     internal InlineOutputLayout (IReadOnlyList<InlineOutputLine> lines)
     {
         ArgumentNullException.ThrowIfNull (lines);
-        List<InlineOutputLine> snapshot = [];
+        List<PreparedLine> snapshot = [];
         var units = 0;
         foreach (InlineOutputLine line in lines)
         {
@@ -33,8 +35,9 @@ internal sealed class InlineOutputLayout
                 }
                 text.Append (span.Text);
             }
-            ValidateText (text.ToString ());
-            snapshot.Add (new InlineOutputLine (line.Spans));
+            string content = text.ToString ();
+            ValidateText (content);
+            snapshot.Add (new PreparedLine (content, line.Spans));
         }
         if (units > MaximumUnits)
         {
@@ -65,80 +68,166 @@ internal sealed class InlineOutputLayout
         }
     }
 
+    // Count widths only: no rows, spans, grapheme strings, or expanded tab cells are allocated.
     internal int CountRows (int width)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero (width);
         var count = 0;
-        foreach (InlineOutputLine _ in Rows (width))
+        foreach (PreparedLine line in _lines)
         {
             count = checked(count + 1);
+            var column = 0;
+            for (var offset = 0; offset < line.Text.Length;)
+            {
+                int length = StringInfo.GetNextTextElementLength (line.Text.AsSpan (offset));
+                if (column == width)
+                {
+                    count = checked(count + 1);
+                    column = 0;
+                }
+                if (line.Text [offset] == '\t')
+                {
+                    int end = column + 8 - column % 8;
+                    count = checked(count + (end - 1) / width);
+                    column = (end - 1) % width + 1;
+                    offset += length;
+                    continue;
+                }
+                int cells = GraphemeHelper.GetGraphemeColumns (line.Text.AsSpan (offset, length));
+                if (cells > width || cells == 0 && column == 0)
+                {
+                    cells = 1;
+                }
+                if (column + cells > width)
+                {
+                    count = checked(count + 1);
+                    column = 0;
+                }
+                column += cells;
+                offset += length;
+            }
         }
         return count;
     }
 
-    internal IEnumerable<InlineOutputLine> Rows (int width)
+    internal IEnumerable<InlineOutputRow> Rows (int width)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero (width);
-        foreach (InlineOutputLine line in _lines)
+        RowBuilder row = new ();
+        foreach (PreparedLine line in _lines)
         {
-            string text = string.Concat (line.Spans.Select (span => span.Text));
-            var offset = 0;
             var spanIndex = 0;
-            var spanEnd = line.Spans.Count > 0 ? line.Spans [0].Text.Length : 0;
+            int spanEnd = line.Spans.Count > 0 ? line.Spans [0].Text.Length : 0;
             var column = 0;
-            List<InlineOutputSpan> row = [];
-            foreach (string element in GraphemeHelper.GetGraphemes (text))
+            for (var offset = 0; offset < line.Text.Length;)
             {
+                int length = StringInfo.GetNextTextElementLength (line.Text.AsSpan (offset));
                 while (spanIndex + 1 < line.Spans.Count && offset >= spanEnd)
                 {
                     spanIndex++;
                     spanEnd += line.Spans [spanIndex].Text.Length;
                 }
                 Attribute? style = line.Spans [spanIndex].Attribute;
-                offset += element.Length;
                 if (column == width)
                 {
-                    yield return new InlineOutputLine (row);
-                    row = [];
+                    yield return row.Build (column);
                     column = 0;
                 }
-                if (element == "\t")
+                if (line.Text [offset] == '\t')
                 {
                     int spaces = 8 - column % 8;
-                    for (var i = 0; i < spaces; i++)
+                    while (spaces > 0)
                     {
                         if (column == width)
                         {
-                            yield return new InlineOutputLine (row);
-                            row = [];
+                            yield return row.Build (column);
                             column = 0;
                         }
-                        row.Add (new InlineOutputSpan (" ", style));
-                        column++;
+                        int take = Math.Min (spaces, width - column);
+                        row.AppendSpaces (take, style);
+                        column += take;
+                        spaces -= take;
                     }
+                    offset += length;
                     continue;
                 }
-                string grapheme = element;
-                int cells = Math.Max (0, grapheme.GetColumns ());
-                if (cells == 0 && column == 0)
+                int cells = GraphemeHelper.GetGraphemeColumns (line.Text.AsSpan (offset, length));
+                bool needsBase = cells == 0 && column == 0;
+                bool needsReplacement = cells > width;
+                if (needsBase || needsReplacement)
                 {
-                    grapheme = "◌" + grapheme;
-                    cells = 1;
-                }
-                if (cells > width)
-                {
-                    grapheme = "�";
                     cells = 1;
                 }
                 if (column + cells > width)
                 {
-                    yield return new InlineOutputLine (row);
-                    row = [];
+                    yield return row.Build (column);
                     column = 0;
                 }
-                row.Add (new InlineOutputSpan (grapheme, style));
+                if (needsBase)
+                {
+                    row.Append ("◌", style);
+                }
+                if (needsReplacement)
+                {
+                    row.Append ("�", style);
+                }
+                else
+                {
+                    row.Append (line.Text.AsSpan (offset, length), style);
+                }
                 column += cells;
+                offset += length;
             }
-            yield return new InlineOutputLine (row);
+            yield return row.Build (column);
+        }
+    }
+
+    private sealed record PreparedLine (string Text, IReadOnlyList<InlineOutputSpan> Spans);
+
+    // Reuse scratch storage, allocating a span only at a style transition or the end of a row.
+    private sealed class RowBuilder
+    {
+        private readonly List<InlineOutputSpan> _spans = [];
+        private readonly StringBuilder _text = new ();
+        private Attribute? _style;
+
+        internal void Append (ReadOnlySpan<char> text, Attribute? style)
+        {
+            SetStyle (style);
+            _text.Append (text);
+        }
+
+        internal void AppendSpaces (int count, Attribute? style)
+        {
+            SetStyle (style);
+            _text.Append (' ', count);
+        }
+
+        internal InlineOutputRow Build (int columns)
+        {
+            FlushRun ();
+            InlineOutputRow result = new (Array.AsReadOnly (_spans.ToArray ()), columns);
+            _spans.Clear ();
+            return result;
+        }
+
+        private void SetStyle (Attribute? style)
+        {
+            if (_style != style)
+            {
+                FlushRun ();
+            }
+            _style = style;
+        }
+
+        private void FlushRun ()
+        {
+            if (_text.Length == 0)
+            {
+                return;
+            }
+            _spans.Add (new InlineOutputSpan (_text.ToString (), _style));
+            _text.Clear ();
         }
     }
 }
