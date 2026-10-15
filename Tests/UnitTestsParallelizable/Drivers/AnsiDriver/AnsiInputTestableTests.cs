@@ -578,6 +578,64 @@ public class AnsiInputTestableTests
         Assert.Equal (Key.PageDown.WithCtrl.WithShift, receivedKey);
     }
 
+    // Claude - Opus 5.5
+    [Fact]
+    public void AnsiInput_ProcessQueue_CombinesSurrogatePair_IntoSingleNonBmpKey ()
+    {
+        AnsiInput ansiInput = new ();
+        ConcurrentQueue<char> queue = new ();
+        ansiInput.Initialize (queue);
+
+        AnsiInputProcessor processor = new (queue);
+        processor.InputImpl = ansiInput;
+
+        List<Key> receivedKeys = [];
+        processor.KeyDown += (_, k) => receivedKeys.Add (k);
+
+        foreach (char ch in "a\U0001F642b")
+        {
+            ((ITestableInput<char>)ansiInput).InjectInput (ch);
+        }
+
+        SimulateInputThread (ansiInput, queue);
+        processor.ProcessQueue ();
+
+        Assert.Equal (3, receivedKeys.Count);
+        Assert.Equal (Key.A, receivedKeys [0]);
+        Assert.Equal ((KeyCode)0x1F642, receivedKeys [1].KeyCode);
+        Assert.Equal (Key.B, receivedKeys [2]);
+        Assert.DoesNotContain (receivedKeys, k => k.KeyCode == (KeyCode)0xFFFD);
+    }
+
+    // Claude - Opus 5.5
+    [Fact]
+    public void AnsiInput_ProcessQueue_CombinesSurrogatePair_SplitAcrossReads ()
+    {
+        AnsiInput ansiInput = new ();
+        ConcurrentQueue<char> queue = new ();
+        ansiInput.Initialize (queue);
+
+        AnsiInputProcessor processor = new (queue);
+        processor.InputImpl = ansiInput;
+
+        List<Key> receivedKeys = [];
+        processor.KeyDown += (_, k) => receivedKeys.Add (k);
+
+        // A UTF-16 console read (ReadConsoleW) may end between the high and low surrogate.
+        ((ITestableInput<char>)ansiInput).InjectInput ('\uD83D');
+        SimulateInputThread (ansiInput, queue);
+        processor.ProcessQueue ();
+
+        Assert.Empty (receivedKeys);
+
+        ((ITestableInput<char>)ansiInput).InjectInput ('\uDE42');
+        SimulateInputThread (ansiInput, queue);
+        processor.ProcessQueue ();
+
+        Assert.Single (receivedKeys);
+        Assert.Equal ((KeyCode)0x1F642, receivedKeys [0].KeyCode);
+    }
+
     #endregion
 
     #region Mouse Event Sequencing Tests
