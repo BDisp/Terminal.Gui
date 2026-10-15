@@ -1,4 +1,6 @@
+using System.Reflection;
 using System.Text;
+using Moq;
 
 namespace ApplicationTests;
 
@@ -75,6 +77,75 @@ public class ApplicationInlineOutputTests
         app.End (outerOwner);
         Assert.True (last.IsCanceled);
         Assert.True (app.PrintAboveAsync ("later", TestContext.Current.CancellationToken).IsCanceled);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void FinalSessionTeardownDoesNotCancelOutputAdmittedForNewSession ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using ManualResetEventSlim teardownPaused = new ();
+        using ManualResetEventSlim resumeTeardown = new ();
+        CancellationToken testToken = TestContext.Current.CancellationToken;
+        Lock dispatchLock = (Lock)typeof (ApplicationImpl).GetField ("_dispatchLock", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue (app)!;
+        bool running = true;
+        Mock<IRunnable> ending = new ();
+        ending.SetupGet (runnable => runnable.IsRunning).Returns (() =>
+        {
+            bool result = Volatile.Read (ref running);
+            if (result || dispatchLock.IsHeldByCurrentThread || Thread.CurrentThread.ManagedThreadId == app.MainThreadId)
+            {
+                return result;
+            }
+            PauseTeardown ();
+            return result;
+        });
+        ending.Setup (runnable => runnable.SetIsRunning (false)).Callback (() => Volatile.Write (ref running, false));
+        ending.Setup (runnable => runnable.RaiseIsRunningChangedEvent (false)).Callback (PauseTeardown);
+        SessionToken oldOwner = new (ending.Object);
+        app.SessionStack!.Push (oldOwner);
+        Task oldPrint = app.PrintAboveAsync (oldOwner, "old", testToken);
+        Exception? failure = null;
+        Thread worker = new (() =>
+        {
+            try { app.End (oldOwner); }
+            catch (Exception error) { failure = error; }
+        }) { IsBackground = true };
+        using Runnable next = new () { Width = Dim.Fill (), Height = 2 };
+        SessionToken? nextOwner = null;
+        Task? nextPrint = null;
+        worker.Start ();
+        try
+        {
+            Assert.True (teardownPaused.Wait (TimeSpan.FromSeconds (5), testToken));
+            nextOwner = app.Begin (next)!;
+            nextPrint = app.PrintAboveAsync (nextOwner, "new", testToken);
+            Assert.False (nextPrint.IsCompleted);
+        }
+        finally
+        {
+            resumeTeardown.Set ();
+            Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
+        }
+
+        Assert.Null (failure);
+        Assert.True (oldPrint.IsCanceled);
+        Assert.NotNull (nextPrint);
+        Assert.False (nextPrint.IsCompleted);
+        app.LayoutAndDraw ();
+        Assert.True (nextPrint.IsCompletedSuccessfully);
+        app.End (nextOwner!);
+
+        void PauseTeardown ()
+        {
+            if (teardownPaused.IsSet)
+            {
+                return;
+            }
+            // Pause the stale off-lock state read, or the later lifecycle notification once that read is removed.
+            teardownPaused.Set ();
+            Assert.True (resumeTeardown.Wait (TimeSpan.FromSeconds (5), testToken));
+        }
     }
 
     [Fact]

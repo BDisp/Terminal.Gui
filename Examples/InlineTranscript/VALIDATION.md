@@ -119,3 +119,17 @@ terminal settings, the same four color-output tests documented above failed.
 The Release inline transcript passed ConPTY and WinPTY bridge history checks
 at 50x12, 50x3, and 1x1, plus redirected stdout. Actual Windows Terminal
 and conhost window rendering remains unvalidated.
+
+## Copilot final-session teardown follow-up: 2026-10-14
+
+Session teardown now captures pending inline output under the same dispatch lock
+and lifetime decision as pending UI dispatches. Cancellation after releasing
+the lock operates only on those captured requests, preserving output admitted
+by a new session while the previous session finishes teardown. A deterministic
+worker/UI regression reproduced cancellation of the new session's request
+before the fix and now verifies that the old request cancels while the new
+request remains pending and prints successfully.
+
+On Windows ARM64 with the true-color environment above, all 25 application
+inline-output tests passed. The full parallel suite passed 17,921 tests with
+17 skipped; the nonparallel and integration suites passed 33/33 and 437/437.
