@@ -395,7 +395,7 @@ When `AppModel == Inline`, the ANSI driver changes behavior in several ways:
 | Cursor positioning | Absolute terminal coordinates | Offset by `App.Screen.Y` |
 | Shutdown | Emit `CSI ?1049l` (restore) | Move cursor below inline region |
 
-**Startup gate** (`AnsiStartupGate`): In inline mode, `AnsiSizeMonitor` sends a CPR query (`ESC[6n`) to discover the cursor row. The startup gate defers the first `LayoutAndDraw` until both the CPR response and terminal size query complete. If the terminal never responds, the gate times out and rendering proceeds from row 0.
+**Startup gate** (`AnsiStartupGate`): In inline mode, `AnsiSizeMonitor` sends a CPR query (`ESC[6n`) to discover the cursor row. The startup gate defers the first `LayoutAndDraw` until cursor position, any pending terminal size query, and startup capability probes are ready. A DA1 reply releases the kitty keyboard and default-color waits without cancelling those probes. If queries do not respond, their deadlines allow rendering to proceed; cursor position falls back to row 0.
 
 **`AnsiOutput` changes**: `SetCursorPositionImpl` adds `App.Screen.Y` to all row coordinates so output lands at the correct terminal rows. On init, `CSI ?1049h` and `CSI 2J` are skipped. On shutdown, `CSI ?1049l` is skipped and the cursor is positioned at the bottom of the inline region.
 

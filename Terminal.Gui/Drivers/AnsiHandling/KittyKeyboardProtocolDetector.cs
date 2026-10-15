@@ -62,7 +62,8 @@ public class KittyKeyboardProtocolDetector
 
                     _driver.KittyKeyboardCapabilities.Flags = result.Flags;
                     Trace.Lifecycle (nameof (KittyKeyboardProtocolDetector), "Enable", $"Post-enable detect confirmed kitty flags {result.Flags}");
-                });
+                },
+                waitForStartup: false);
     }
 
     /// <summary>
@@ -85,7 +86,9 @@ public class KittyKeyboardProtocolDetector
     ///     Detects kitty keyboard protocol support asynchronously through the ANSI request scheduler.
     /// </summary>
     /// <param name="resultCallback">Called when detection completes.</param>
-    public void Detect (Action<KittyKeyboardCapabilities> resultCallback)
+    public void Detect (Action<KittyKeyboardCapabilities> resultCallback) => Detect (resultCallback, waitForStartup: true);
+
+    private void Detect (Action<KittyKeyboardCapabilities> resultCallback, bool waitForStartup)
     {
         ArgumentNullException.ThrowIfNull (resultCallback);
 
@@ -101,8 +104,10 @@ public class KittyKeyboardProtocolDetector
                          "Detect",
                          $"Queueing kitty keyboard probe '{EscSeqUtils.CSI_QueryKittyKeyboardFlags.Request}'");
 
-        IDisposable? kittyKeyboardQueryCompletionHandle = _startupGate?.RegisterQuery (AnsiStartupQuery.KittyKeyboard,
-                                                                                        StartupKittyKeyboardQueryTimeout);
+        IDisposable? kittyKeyboardQueryCompletionHandle = waitForStartup
+                                                              ? _startupGate?.RegisterQuery (AnsiStartupQuery.KittyKeyboard,
+                                                                                             StartupKittyKeyboardQueryTimeout)
+                                                              : null;
 
         QueueRequest (EscSeqUtils.CSI_QueryKittyKeyboardFlags,
                       response =>
