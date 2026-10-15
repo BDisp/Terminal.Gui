@@ -291,10 +291,11 @@ internal partial class ApplicationImpl
                 int bottomEdge = Screen.Y + Screen.Height;
                 int canGrowDown = Math.Min (extraRows, termHeight - bottomEdge);
 
-                // Reserve the new rows by scrolling them into existence.
-                if (canGrowDown > 0)
+                // Start at the last owned row, not at the live caret. A zero-height region has no last row;
+                // its new rows are already available below the origin and need no cursor movement.
+                if (canGrowDown > 0 && Screen.Height > 0)
                 {
-                    if (!WriteInlineMovement (new string ('\n', canGrowDown)))
+                    if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (bottomEdge, 1) + new string ('\n', canGrowDown)))
                     {
                         return;
                     }
@@ -314,7 +315,7 @@ internal partial class ApplicationImpl
 
                     if (canScrollUp > 0)
                     {
-                        if (!WriteInlineMovement (new string ('\n', canScrollUp)))
+                        if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (termHeight, 1) + new string ('\n', canScrollUp)))
                         {
                             return;
                         }
@@ -345,6 +346,15 @@ internal partial class ApplicationImpl
                     forceRedraw = true;
                 }
             }
+        }
+
+        if (AppModel == AppModel.Inline && TryShrinkInlineRegion ())
+        {
+            forceRedraw = true;
+        }
+        if (!PassIsValid ())
+        {
+            return;
         }
 
         if (DrainInlineOutput (candidate))
