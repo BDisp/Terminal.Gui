@@ -17,16 +17,20 @@ cursor-position replies and replayed into a history-aware terminal model. The nu
 messages and both preceding shell sentinels occur once and in order. The live composer
 retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
 [VALIDATION.md](VALIDATION.md). Native conhost rendering, editing, Unicode paste,
-history copying, resize recovery, and teardown checks also passed. Native Windows
-Terminal checks remain outstanding because the computer-use tool did not expose
-its running test windows.
+history copying, resize recovery, and teardown checks also passed. Application
+checks inside real Windows Terminal sessions passed at 100x45, 50x12, and 50x3.
+Windows Terminal visual inspection, native clipboard/selection, physical keyboard
+input, and window-resize interaction remain unverified because the computer-use
+tool blocks that host.
 
 ## Windows Terminal and conhost checks
 
 The automated ConPTY and WinPTY checks validate output streams and a terminal
 history model. An interactive pass in classic conhost also passed on Windows
 ARM64; see [validation details](VALIDATION.md#native-conhost-checks-2026-10-15).
-Windows Terminal still requires its own native pass. To repeat the native checks,
+Windows Terminal application-level results are recorded
+[separately](VALIDATION.md#windows-terminal-application-checks-2026-10-15); its
+native GUI checks still require a manual pass. To repeat the native checks,
 follow the steps below in each host.
 
 To check Windows Terminal, run these PowerShell commands from the repository root:

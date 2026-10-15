@@ -238,3 +238,48 @@ PTY validation also remains outstanding.
 All reported non-skipped CI checks passed on `82700dbf9`, including Windows,
 Linux, and macOS unit/integration jobs, Windows/Linux builds, Linux performance
 smoke tests, and documentation checks. The benchmark job was skipped.
+
+## Windows Terminal application checks: 2026-10-15
+
+Application-level tests subsequently passed inside actual Windows Terminal
+1.25.2733.0 sessions on Windows ARM64 against the same library source. The probe
+was launched directly with `wt.exe`; `WT_SESSION` was populated, stdin/stdout were
+attached to the terminal, and the observed probe process was a direct descendant
+of `WindowsTerminal.exe`. This coverage goes beyond the earlier standalone
+ConPTY/WinPTY bridge checks.
+
+An isolated test-only application used the ANSI driver, a real running inline
+session, awaited styled output, and Terminal.Gui's `InputInjector` on the UI
+thread. Input was injected inside the test application; no Windows Terminal GUI
+input or shell commands were sent. The probe emitted preceding console sentinels
+and a final sentinel after disposal, but did not assert Windows Terminal's
+frontend scrollback contents.
+
+| Actual terminal size | Styled insertions | Live height | Application-injected editing and Enter | Console restoration |
+| --- | --- | --- | --- | --- |
+| 100x45 | 24/24 | 3 | `hello`, `alpha Xbeta`, and Unicode submission passed | Passed |
+| 50x12 | 24/24 | 3 | All three submissions passed | Passed |
+| 50x3 | 24/24 | 3 | All three submissions passed | Passed |
+
+During insertion, the checks injected `helo`, Left, and `l` to produce `hello`,
+and Ctrl+Left plus `X` in `alpha beta` to produce `alpha Xbeta`. A third submission
+contained accented, CJK, combining, and emoji text (`unicode café 界 é 🙂 end`).
+Each submission cleared the input and awaited its completed print-above task.
+The live application screen and composer remained three rows high throughout.
+
+A separate 100x45 run injected Escape after four completed insertions; the
+producer was cancelled before the remaining 20 messages. The result reported no
+failure. Normal and early-stop runs restored the original input mode (503),
+output mode (7), and visible cursor; the 50x12 and 50x3 runs also retained their
+original console dimensions after disposal.
+
+No Terminal.Gui defect was found, so no production code changed. These checks
+exercise real terminal startup/output and application input handling, but do not
+verify the host's physical keyboard translation, visual/font rendering, native
+clipboard/selection, frontend scrollback, or interactive resize. The computer-use
+API still returned `product policy blocks this app` for Windows Terminal after
+the Full Access retry; those GUI checks remain unverified. Linux PTY validation
+also remains outstanding.
+
+All reported non-skipped CI checks also passed on documentation head `e4a99fdac`;
+the benchmark job was skipped.
