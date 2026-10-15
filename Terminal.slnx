@@ -52,7 +52,6 @@
     <File Path="Examples/Config/windows.json" />
     <File Path="Examples/PowershellExample.ps1" />
     <Project Path="docfx/scripts/OutputView/OutputView.csproj" />
-    <Project Path="Examples/InlineTranscript/InlineTranscript.csproj" />
     <Project Path="Examples/ScenarioRunner/ScenarioRunner.csproj" />
     <Project Path="Examples/UICatalog/UICatalog.csproj" />
   </Folder>

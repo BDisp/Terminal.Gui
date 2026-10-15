@@ -31,8 +31,9 @@ a modal. Unowned calls are canceled when the final session ends. Calls after Ini
 before the first Begin wait for that session. Calls after final End cancel rather than
 migrating to a later session. Calls before Init or during disposal throw.
 
-The [InlineTranscript example](https://github.com/tui-cs/Terminal.Gui/tree/develop/Examples/InlineTranscript)
+The [Inline Transcript UICatalog scenario](https://github.com/tui-cs/Terminal.Gui/blob/develop/Examples/UICatalog/Scenarios/InlineTranscript.cs)
 provides an editable three-row composer and an awaited background producer.
+To run it directly, run `dotnet run --project Examples/ScenarioRunner -- run "Inline Transcript"`.
 
 ## Text and ordering
 
