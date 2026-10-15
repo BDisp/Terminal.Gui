@@ -278,6 +278,22 @@ public class ApplicationInlineOutputTests
         }
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (AppModel.Inline, false)]
+    [InlineData (AppModel.Inline, true)]
+    [InlineData (AppModel.FullScreen, false)]
+    [InlineData (AppModel.FullScreen, true)]
+    public void WorkerDisposalStopsModalOpenedFromDrawCompletion (AppModel model, bool throughIteration) =>
+        VerifyWorkerDisposalFromRenderingNotification (model, throughIteration, insertion: false);
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void WorkerDisposalStopsModalOpenedFromInsertionScreenChanged (bool throughIteration) =>
+        VerifyWorkerDisposalFromRenderingNotification (AppModel.Inline, throughIteration, insertion: true);
+
     [Fact]
     public void FullscreenAndDegradedOutputRejectPrinting ()
     {
@@ -675,6 +691,124 @@ public class ApplicationInlineOutputTests
             await print;
             continued = true;
             continuedDuringDraw = (bool)typeof (ApplicationImpl).GetField ("_layoutAndDrawActive", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue (app)!;
+        }
+    }
+
+    private static void VerifyWorkerDisposalFromRenderingNotification (AppModel model, bool throughIteration, bool insertion)
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _, model: model);
+        using Runnable view = new () { Width = Dim.Fill (), Height = 2 };
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 2 };
+        modal.Add (new Label { Text = "MODAL", Width = 5 });
+        app.Begin (view);
+        app.LayoutAndDraw ();
+        using ManualResetEventSlim modalRunning = new ();
+        using ManualResetEventSlim disposalFinished = new ();
+        Exception? disposalFailure = null;
+        bool forcedStop = false;
+        bool modalDrawn = false;
+        Thread disposer = new (() =>
+        {
+            try
+            {
+                if (!modalRunning.Wait (TimeSpan.FromSeconds (5)))
+                {
+                    throw new TimeoutException ("The modal did not enter its nested loop.");
+                }
+                app.Dispose ();
+            }
+            catch (Exception error)
+            {
+                disposalFailure = error;
+            }
+            finally
+            {
+                disposalFinished.Set ();
+            }
+        }) { IsBackground = true };
+        Thread watchdog = new (() =>
+        {
+            if (!modalRunning.Wait (TimeSpan.FromSeconds (5)) || disposalFinished.Wait (TimeSpan.FromSeconds (5)))
+            {
+                return;
+            }
+            // Bound the failing regression's cleanup without letting an external close count as success.
+            forcedStop = true;
+            app.RequestStop (modal);
+        }) { IsBackground = true };
+        app.Iteration += OnModalIteration;
+        app.LayoutAndDrawComplete += OnModalDrawn;
+        if (insertion)
+        {
+            app.ScreenChanged += OpenScreenChangedModal;
+            _ = app.PrintAboveAsync ("above", TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            app.LayoutAndDrawComplete += OpenCompletionModal;
+            view.SetNeedsDraw ();
+        }
+        disposer.Start ();
+        watchdog.Start ();
+        try
+        {
+            if (throughIteration)
+            {
+                app.Run (view);
+            }
+            else
+            {
+                app.LayoutAndDraw ();
+            }
+        }
+        finally
+        {
+            Assert.True (disposer.Join (TimeSpan.FromSeconds (10)));
+            Assert.True (watchdog.Join (TimeSpan.FromSeconds (10)));
+            app.Iteration -= OnModalIteration;
+            app.LayoutAndDrawComplete -= OnModalDrawn;
+            app.ScreenChanged -= OpenScreenChangedModal;
+            app.LayoutAndDrawComplete -= OpenCompletionModal;
+        }
+
+        Assert.Null (disposalFailure);
+        Assert.False (forcedStop, "Worker disposal needed an external modal close to release the rendering lock.");
+        Assert.Contains ("MODAL", bytes.ToString ());
+        Assert.False (app.Initialized);
+        Assert.False (view.IsRunning);
+        Assert.False (modal.IsRunning);
+
+        void OnModalIteration (object? _, EventArgs<IApplication?> __)
+        {
+            if (!modalDrawn || !ReferenceEquals (app.TopRunnable, modal))
+            {
+                return;
+            }
+            app.Iteration -= OnModalIteration;
+            modalRunning.Set ();
+        }
+
+        void OnModalDrawn (object? _, EventArgs __)
+        {
+            if (!ReferenceEquals (app.TopRunnable, modal))
+            {
+                return;
+            }
+            app.LayoutAndDrawComplete -= OnModalDrawn;
+            modalDrawn = true;
+        }
+
+        void OpenScreenChangedModal (object? _, EventArgs<Rectangle> __)
+        {
+            app.ScreenChanged -= OpenScreenChangedModal;
+            app.Run (modal);
+        }
+
+        void OpenCompletionModal (object? _, EventArgs __)
+        {
+            app.LayoutAndDrawComplete -= OpenCompletionModal;
+            app.Run (modal);
         }
     }
 

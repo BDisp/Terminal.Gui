@@ -133,3 +133,24 @@ request remains pending and prints successfully.
 On Windows ARM64 with the true-color environment above, all 25 application
 inline-output tests passed. The full parallel suite passed 17,921 tests with
 17 skipped; the nonparallel and integration suites passed 33/33 and 437/437.
+
+## Copilot worker-disposal follow-up: 2026-10-14
+
+Both the nested run loop and the retry after a vetoed session end now honor
+the shutdown flag published before coordinator cleanup waits for the rendering
+lock. Coordinator iterations also stop before accessing the loop after cleanup.
+Output cleanup remains serialized with physical writes by the same rendering
+lock; the existing blocked-insertion/disposal regression continues to pass.
+
+Six bounded worker-disposal regressions reproduced the deadlock before the fix.
+They open and render a synchronous modal from insertion `ScreenChanged` or
+`LayoutAndDrawComplete`, then start disposal from a worker. They cover inline
+and fullscreen completion events through direct drawing and the main run loop.
+Each now finishes without the watchdog requesting an external modal close.
+A separate regression verifies that an iteration after coordinator stop does
+not use the stopped loop.
+
+Windows ARM64 validation passed all 31 application inline-output tests in both
+Debug and Release. The Debug suites passed 17,928 parallel tests with 17 skipped,
+33/33 nonparallel tests, and 437/437 integration tests with the true-color
+environment described above.

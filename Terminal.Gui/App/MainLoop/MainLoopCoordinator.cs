@@ -92,6 +92,10 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator, IInline
     {
         lock (_oLockInitialization)
         {
+            if (_stopCalled)
+            {
+                return;
+            }
             _loop.Iteration ();
         }
     }
