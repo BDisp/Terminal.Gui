@@ -70,7 +70,36 @@ public static class ApplicationInlineOutputExtensions
     internal static InlineOutputLine [] Split (string text)
     {
         ArgumentNullException.ThrowIfNull (text);
-        if (text.Length >= InlineOutputLayout.MaximumUnits)
+        long units = 0;
+        int lineLength = 0;
+        bool endedWithLineBreak = false;
+        for (int index = 0; index < text.Length; index++)
+        {
+            char character = text [index];
+            if (character is not ('\r' or '\n'))
+            {
+                lineLength++;
+                endedWithLineBreak = false;
+                continue;
+            }
+            if (character == '\r' && index + 1 < text.Length && text [index + 1] == '\n')
+            {
+                index++;
+            }
+            // Each materialized line has one span. Count the line and at least one span unit.
+            units += 1 + Math.Max (1, lineLength);
+            if (units > InlineOutputLayout.MaximumUnits)
+            {
+                throw new InvalidOperationException ("Inline output payload is too large. Submit smaller awaited batches.");
+            }
+            lineLength = 0;
+            endedWithLineBreak = true;
+        }
+        if (!endedWithLineBreak || text.Length == 0)
+        {
+            units += 1 + Math.Max (1, lineLength);
+        }
+        if (units > InlineOutputLayout.MaximumUnits)
         {
             throw new InvalidOperationException ("Inline output payload is too large. Submit smaller awaited batches.");
         }

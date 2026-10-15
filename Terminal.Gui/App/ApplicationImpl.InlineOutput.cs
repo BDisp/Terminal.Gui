@@ -9,6 +9,7 @@ internal partial class ApplicationImpl
     private int _inlineOutputOutstanding;
     private Exception? _inlineOutputFailure;
     private bool _layoutAndDrawActive;
+    private readonly HashSet<SessionToken> _activeLayoutSessions = [];
     private bool _inlineOriginEstablished;
     private bool _settlingInlineOutput;
 

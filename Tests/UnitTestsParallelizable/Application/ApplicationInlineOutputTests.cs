@@ -5,13 +5,16 @@ namespace ApplicationTests;
 [Collection ("Application Tests")]
 public class ApplicationInlineOutputTests
 {
-    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, int width = 12, int height = 6)
+    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, int width = 12, int height = 6, AppModel model = AppModel.Inline)
     {
-        output = new AnsiOutput (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output = new AnsiOutput (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, model);
         output.SetSize (width, height);
         ApplicationImpl app = new (new AnsiComponentFactory (output: output));
-        app.AppModel = AppModel.Inline;
-        app.ForceInlinePosition = Point.Empty;
+        app.AppModel = model;
+        if (model == AppModel.Inline)
+        {
+            app.ForceInlinePosition = Point.Empty;
+        }
         app.Init (DriverRegistry.Names.ANSI);
         app.Driver!.InlinePosition = Point.Empty;
         return app;
@@ -131,6 +134,77 @@ public class ApplicationInlineOutputTests
         app.LayoutAndDraw ();
         Assert.True (second.IsCompletedSuccessfully);
         app.End (owner);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void InsertionScreenChangedCanRunAndRenderSynchronousModal ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _);
+        using Runnable view = new () { Width = Dim.Fill (), Height = 2 };
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 2 };
+        modal.Add (new Label { Text = "MODAL", Width = 5 });
+        SessionToken owner = app.Begin (view)!;
+        app.LayoutAndDraw ();
+        bytes.Clear ();
+        Task print = app.PrintAboveAsync ("above", TestContext.Current.CancellationToken);
+        Task nextPrint = app.PrintAboveAsync ("next", TestContext.Current.CancellationToken);
+        bool opened = false;
+        app.StopAfterFirstIteration = true;
+        app.ScreenChanged += OpenModal;
+
+        app.LayoutAndDraw ();
+
+        app.ScreenChanged -= OpenModal;
+        Assert.True (opened);
+        Assert.True (print.IsCompletedSuccessfully);
+        Assert.False (nextPrint.IsCompleted);
+        Assert.Contains ("MODAL", bytes.ToString ());
+        app.LayoutAndDraw ();
+        Assert.True (nextPrint.IsCompletedSuccessfully);
+        app.End (owner);
+
+        void OpenModal (object? _, EventArgs<Rectangle> __)
+        {
+            app.ScreenChanged -= OpenModal;
+            opened = true;
+            app.Run (modal);
+        }
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (AppModel.Inline)]
+    [InlineData (AppModel.FullScreen)]
+    public void LayoutAndDrawCompleteCanRunAndRenderSynchronousModal (AppModel model)
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _, model: model);
+        using Runnable view = new () { Width = Dim.Fill (), Height = 2 };
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 2 };
+        modal.Add (new Label { Text = "MODAL", Width = 5 });
+        bool opened = false;
+        app.StopAfterFirstIteration = true;
+        SessionToken owner = app.Begin (view)!;
+        app.LayoutAndDraw ();
+        bytes.Clear ();
+        app.LayoutAndDrawComplete += OpenModal;
+        view.SetNeedsDraw ();
+
+        app.LayoutAndDraw ();
+
+        app.LayoutAndDrawComplete -= OpenModal;
+        Assert.True (opened);
+        Assert.Contains ("MODAL", bytes.ToString ());
+        app.End (owner);
+
+        void OpenModal (object? _, EventArgs __)
+        {
+            app.LayoutAndDrawComplete -= OpenModal;
+            opened = true;
+            app.Run (modal);
+        }
     }
 
     [Fact]

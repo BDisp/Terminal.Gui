@@ -99,3 +99,23 @@ messages once and in order. The submitted text was preserved at 50x12 and
 50x3; the redirected-stdout case emitted no terminal bytes to stdout. These
 checks do not inspect an actual Windows Terminal or conhost window. Linux PTY
 validation remains outstanding.
+
+## Copilot nested-modal and payload follow-up: 2026-10-14
+
+The rendering guard now tracks active sessions. A synchronous modal opened by
+`ScreenChanged` during insertion or by `LayoutAndDrawComplete` can render its
+own session while the callback's original session remains protected from
+recursive drawing. A nested pass cannot drain another pending print request.
+Regressions cover insertion callbacks and completion callbacks in both inline
+and fullscreen modes. String submissions now count normalized lines and their
+single spans against the layout unit limit before splitting. A payload with
+2,097,153 newline characters is rejected within a 64 KB allocation budget.
+
+On Windows ARM64, the focused application and layout suites passed 24/24 and
+33/33. With `TERM=xterm-256color`, `COLORTERM=truecolor`, and `NO_COLOR`
+unset, the full parallel suite passed 17,920 tests with 17 skipped; the
+nonparallel and integration suites passed 33/33 and 437/437. Without those
+terminal settings, the same four color-output tests documented above failed.
+The Release inline transcript passed ConPTY and WinPTY bridge history checks
+at 50x12, 50x3, and 1x1, plus redirected stdout. Actual Windows Terminal
+and conhost window rendering remains unvalidated.

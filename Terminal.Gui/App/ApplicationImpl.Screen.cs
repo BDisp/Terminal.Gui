@@ -131,7 +131,12 @@ internal partial class ApplicationImpl
 
     private void LayoutAndDrawGuarded (bool forceRedraw)
     {
-        if (_layoutAndDrawActive || InlinePlacementLost)
+        if (InlinePlacementLost)
+        {
+            return;
+        }
+        SessionToken? session = SessionStack?.TryPeek (out SessionToken? top) == true ? top : null;
+        if (_layoutAndDrawActive && (session is null || _activeLayoutSessions.Contains (session)))
         {
             return;
         }
@@ -148,15 +153,25 @@ internal partial class ApplicationImpl
                 inlineDriver.InlinePosition = ForceInlinePosition ?? new Point (0, (Coordinator as IInlineRenderCoordinator)?.InitialCursorRow ?? 0);
             }
         }
+        bool previousLayoutAndDrawActive = _layoutAndDrawActive;
         _layoutAndDrawActive = true;
-        InlineOutputOperation? candidate = CaptureInlineOutput ();
+        if (session is not null)
+        {
+            _activeLayoutSessions.Add (session);
+        }
+        // A nested modal may draw, but it must not drain another request from the outer pass.
+        InlineOutputOperation? candidate = previousLayoutAndDrawActive ? null : CaptureInlineOutput ();
         try
         {
             LayoutAndDrawCore (forceRedraw, candidate);
         }
         finally
         {
-            _layoutAndDrawActive = false;
+            if (session is not null)
+            {
+                _activeLayoutSessions.Remove (session);
+            }
+            _layoutAndDrawActive = previousLayoutAndDrawActive;
         }
     }
 

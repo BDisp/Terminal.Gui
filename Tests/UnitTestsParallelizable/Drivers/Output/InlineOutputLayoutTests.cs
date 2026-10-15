@@ -13,6 +13,18 @@ public class InlineOutputLayoutTests
     public void StringNewlines (string text, string expected) =>
         Assert.Equal (expected, string.Join ("|", ApplicationInlineOutputExtensions.Split (text).Select (Text)));
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void OversizedNewlineOnlyStringRejectsBeforeMaterializingLines ()
+    {
+        string text = new ('\n', InlineOutputLayout.MaximumUnits / 2 + 1);
+        long before = GC.GetAllocatedBytesForCurrentThread ();
+
+        Assert.Throws<InvalidOperationException> (() => ApplicationInlineOutputExtensions.Split (text));
+
+        Assert.InRange (GC.GetAllocatedBytesForCurrentThread () - before, 0, 65536);
+    }
+
     [Theory]
     [InlineData ("abcd", 4, "abcd")]
     [InlineData ("abcde", 4, "abcd|e")]
