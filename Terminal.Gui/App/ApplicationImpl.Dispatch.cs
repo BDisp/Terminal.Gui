@@ -159,6 +159,7 @@ internal partial class ApplicationImpl
     private void EndSessionDispatches (SessionToken owner)
     {
         UiDispatchOperation [] pending;
+        InlineOutputOperation [] inlinePending;
         PostedCallback [] posted = [];
 
         lock (_dispatchLock)
@@ -170,14 +171,21 @@ internal partial class ApplicationImpl
             if (HasRunningSession)
             {
                 pending = _queuedDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();
+                inlinePending = _inlineOutputQueue.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();
             }
             else
             {
                 pending = [.. _queuedDispatches];
+                inlinePending = [.. _inlineOutputQueue];
                 posted = TakePostedCallbacks ();
             }
         }
 
+        // A new session may enqueue after the lock is released; only cancel the captured requests.
+        foreach (InlineOutputOperation operation in inlinePending)
+        {
+            operation.Cancel ();
+        }
         CancelAndRelease (pending, posted);
     }
 
@@ -193,6 +201,7 @@ internal partial class ApplicationImpl
             posted = TakePostedCallbacks ();
         }
 
+        EndInlineOutput ();
         CancelAndRelease (pending, posted);
     }
 
@@ -223,7 +232,7 @@ internal partial class ApplicationImpl
 
         lock (_dispatchLock)
         {
-            runNow = CanStartUiWork;
+            runNow = CanStartUiWork && !_settlingInlineOutput;
             queued = false;
             pumpPostedWork = false;
 

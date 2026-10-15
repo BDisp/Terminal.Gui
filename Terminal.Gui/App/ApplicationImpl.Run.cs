@@ -293,8 +293,8 @@ internal partial class ApplicationImpl
                     End (token);
                 }
 
-                // If End succeeded IsRunning is now false — we are done
-                if (!runnable.IsRunning)
+                // Shutdown must also unwind a notification's nested Run instead of retrying a vetoed End.
+                if (!runnable.IsRunning || Volatile.Read (ref _dispatchStopping))
                 {
                     break;
                 }
@@ -419,7 +419,9 @@ internal partial class ApplicationImpl
 
         try
         {
-            while (runnable is { StopRequested: false, IsRunning: true })
+            // Disposal publishes shutdown before waiting for the coordinator's render gate. A synchronous
+            // modal entered from a rendering notification must unwind so that gate can be released.
+            while (!Volatile.Read(ref _dispatchStopping) && runnable is { StopRequested: false, IsRunning: true })
             {
                 if (Coordinator is null)
                 {

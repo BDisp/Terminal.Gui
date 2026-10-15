@@ -323,3 +323,9 @@ protected override void Dispose(bool disposing)
 - [Keyboard Input](keyboard.md) - Keyboard event processing
 - [Mouse Input](mouse.md) - Mouse event handling
 - [Configuration Management](config.md) - Application settings and state
+
+## Output above a live inline region
+
+To print completed styled text above an inline UI, await `app.PrintAboveAsync(...)`.
+See [Printing above an inline application](inline-output.md) for ordering, cancellation,
+supported output, and partial-write behavior.

@@ -34,7 +34,7 @@ namespace Terminal.Gui.Drivers;
 ///         and true-color (24-bit RGB) output through ANSI SGR sequences.
 ///     </para>
 /// </summary>
-public class AnsiOutput : OutputBase, IOutput
+public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 {
     internal delegate bool UnixWriter (ReadOnlySpan<byte> output);
 
@@ -267,6 +267,10 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc cref="IOutput.Write(IOutputBuffer)"/>
     public override void Write (IOutputBuffer buffer)
     {
+        if (!IsInlinePlacementKnown)
+        {
+            return;
+        }
         _lastBuffer = buffer;
         // An out-of-band legacy attribute hook must take effect between physical writes.
         _batchMode = !UsesLegacyAttributeWriter && !HasCustomStringWriter (typeof (AnsiOutput));
@@ -406,6 +410,10 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc/>
     public void SetCursor (Cursor cursor)
     {
+        if (!IsInlinePlacementKnown)
+        {
+            return;
+        }
         try
         {
             if (!cursor.IsVisible)
@@ -434,7 +442,7 @@ public class AnsiOutput : OutputBase, IOutput
     /// <inheritdoc/>
     protected override bool SetCursorPositionImpl (int col, int row)
     {
-        if (_platform == AnsiPlatform.Degraded)
+        if (_platform == AnsiPlatform.Degraded || !IsInlinePlacementKnown)
         {
             return true;
         }
@@ -506,6 +514,12 @@ public class AnsiOutput : OutputBase, IOutput
 
         try
         {
+            if (!IsInlinePlacementKnown)
+            {
+                // A failed insertion may have left an OSC/DCS string open. Close it before
+                // restoring modes so cleanup sequences cannot become part of its payload.
+                Restore ("\u001b\\" + EscSeqUtils.OSC_EndHyperlink ());
+            }
             Restore (EscSeqUtils.CSI_DisableBracketedPaste);
             Restore (EscSeqUtils.CSI_DisableMouseEvents);
             Restore (EscSeqUtils.CSI_ResetAttributes);
@@ -513,8 +527,11 @@ public class AnsiOutput : OutputBase, IOutput
             if (AppModel == AppModel.Inline)
             {
                 Rectangle appScreen = AppScreenGetter?.Invoke () ?? default;
-                Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
-                Restore ("\n");
+                if (IsInlinePlacementKnown)
+                {
+                    Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
+                    Restore ("\n");
+                }
             }
             else
             {

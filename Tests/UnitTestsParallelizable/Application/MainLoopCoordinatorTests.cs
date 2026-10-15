@@ -46,6 +46,19 @@ public class MainLoopCoordinatorTests (ITestOutputHelper outputHelper) : IDispos
         return app;
     }
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void RunIterationAfterStopDoesNotUseDisposedLoop ()
+    {
+        Mock<IApplicationMainLoop<char>> loop = new ();
+        MainLoopCoordinator<char> coordinator = new (new TimedEvents (), new ConcurrentQueue<char> (), loop.Object, new AnsiComponentFactory ());
+
+        coordinator.Stop ();
+        coordinator.RunIteration ();
+
+        loop.Verify (instance => instance.Iteration (), Times.Never);
+    }
+
     /// <summary>
     ///     Verifies that Dispose() stops the input loop when using Application.Create().
     ///     This is the key test that proves the input thread respects cancellation.
