@@ -240,7 +240,10 @@ internal partial class ApplicationImpl
             {
                 _postedCallbacks.AddLast (new PostedCallback (callback, state));
                 queued = true;
-                pumpPostedWork = pumpWithoutRunLoop && !IsRunLoopRunning && !HasEndedSession;
+                // Do not re-enter a rendering pass while settling inline output completion.
+                // Otherwise await continuations for PrintAboveAsync can run before LayoutAndDraw
+                // unwinds, observing transient draw state (for example _layoutAndDrawActive=true).
+                pumpPostedWork = pumpWithoutRunLoop && !IsRunLoopRunning && !HasEndedSession && !_settlingInlineOutput && !_layoutAndDrawActive;
             }
         }
 
