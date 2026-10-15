@@ -19,6 +19,43 @@ retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
 [VALIDATION.md](VALIDATION.md); actual Windows Terminal/conhost window rendering
 remains outstanding.
 
+## Windows Terminal and conhost checks
+
+The automated ConPTY and WinPTY checks validate output streams and a terminal
+history model. Native host rendering, input, and scrollback selection still
+require an interactive pass in each host.
+
+To check Windows Terminal, run these PowerShell commands from the repository root:
+
+```powershell
+Write-Output 'SHELL BEFORE 1'
+Write-Output 'SHELL BEFORE 2'
+dotnet run --project Examples/InlineTranscript -c Release --no-build -- --demo
+Write-Output 'SHELL AFTER'
+```
+
+To check classic conhost, repeat in a shell window hosted by conhost. A Command
+Prompt tab inside Windows Terminal still tests the Windows Terminal host.
+
+1. Observe the composer while messages print. It should remain readable at its
+   reserved three-row height, with completed lines above it.
+2. After exit, scroll back and verify the two preceding shell sentinels,
+   messages `000` through `023`, and the following sentinel appear once and in
+   order. Select and copy completed text to verify native scrollback copying.
+3. To check editing, rerun without `--demo`. Enter text, move the caret with
+   arrow and modified-arrow keys, paste a single line, and press Enter. Verify
+   the submitted text prints once and the input clears. Include wide and
+   combining characters to check the host's font and cell-width agreement.
+4. Press Escape and verify prompt, cursor, and keyboard behavior return to
+   normal. Also repeat the demo and press Escape while messages are pending;
+   it should exit promptly.
+5. To check resize recovery, resize while the app is active and verify the
+   composer remains usable and exits cleanly. Resizing currently clears and
+   resets the live region; preservation of visible output across resize is a
+   follow-up feature.
+
+## Unix PTY/history checks
+
 To reproduce the Unix PTY/history check after building Release:
 
 ```sh

@@ -154,3 +154,33 @@ Windows ARM64 validation passed all 31 application inline-output tests in both
 Debug and Release. The Debug suites passed 17,928 parallel tests with 17 skipped,
 33/33 nonparallel tests, and 437/437 integration tests with the true-color
 environment described above.
+
+## Develop rebase and Windows verification: 2026-10-15
+
+PR #5714 merged into `develop` at
+`37a7e518855b075103fc7b059820cb17d606f928`. The six feature and review-fix
+commits were rebased onto that head; `git range-diff` confirmed identical
+patches for all six commits. PR #5715 now targets `develop` directly.
+
+The rebased source at `cf8dc77fe` passed full Debug and Release solution
+builds on Windows ARM64 with .NET SDK 10.0.401. With the true-color environment
+above, the Debug parallel suite passed 17,928 tests with 17 skipped and no
+failures, the nonparallel suite passed 33/33, and integration passed 437/437.
+The Release application inline-output lifecycle suite passed 31/31.
+
+Fresh ConPTY and WinPTY bridge checks passed at 50x12, full-height 50x3, 1x1,
+and with redirected stdout. Both preserved the shell sentinels and all 24
+numbered messages once and in order; redirected stdout remained empty.
+Additional 50x12 checks passed caret editing during streaming output and
+Escape while messages were pending, returning cleanly to the shell.
+
+An initial WinPTY caret test sent text and an arrow in one batch and observed
+the arrow before the text. A raw Windows VT-input probe reproduced this
+reordering without Terminal.Gui. Delivering text and cursor keys in separate
+writes passed on both backends; no Terminal.Gui change was required.
+
+Actual Windows Terminal and classic conhost window rendering, native
+clipboard/scrollback selection, and real-font Unicode width still require
+interactive checks. The [example README](README.md#windows-terminal-and-conhost-checks)
+now provides steps for both hosts, input and Escape behavior, and the existing
+resize clear/reset behavior. Linux PTY validation also remains outstanding.
