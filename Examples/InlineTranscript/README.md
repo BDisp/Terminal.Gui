@@ -24,6 +24,7 @@ native scrollback and Select All/copy, physical keyboard editing during output,
 paste, maximize/restore, and Escape with pending output. Windows console input
 replaces non-BMP characters, such as emoji, with U+FFFD before the ANSI driver
 reads them; see [validation details](VALIDATION.md#native-windows-terminal-gui-checks-2026-10-15).
+The independent Windows input fix is proposed in [PR #5721](https://github.com/tui-cs/Terminal.Gui/pull/5721).
 
 ## Windows Terminal and conhost checks
 

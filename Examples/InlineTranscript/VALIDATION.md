@@ -351,3 +351,11 @@ Native Shift+drag selection did not select text on the first attempt,
 possibly because the window was not focused. WT Select All and copy succeeded
 after the window was focused. Mouse-mode selection bypass was not otherwise
 investigated. Linux PTY validation remains outstanding.
+
+The independent Windows input fix is proposed in
+[PR #5721](https://github.com/tui-cs/Terminal.Gui/pull/5721), targeting `develop`
+separately. It reads UTF-16 with `ReadConsoleW` and distinguishes a cancelled
+zero-character read from the Ctrl+Z fallback. Independent native ConPTY checks
+verified emoji typing, caret insertion, bracketed paste, long input, Ctrl+Z,
+and blocked-read cancellation. The fix is not included in this inline-output PR;
+the earlier native conhost emoji claim still requires a host-specific retest.
