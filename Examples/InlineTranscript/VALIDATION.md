@@ -184,3 +184,57 @@ clipboard/scrollback selection, and real-font Unicode width still require
 interactive checks. The [example README](README.md#windows-terminal-and-conhost-checks)
 now provides steps for both hosts, input and Escape behavior, and the existing
 resize clear/reset behavior. Linux PTY validation also remains outstanding.
+
+## Native conhost checks: 2026-10-15
+
+Native Windows Console Host (`conhost.exe` 10.0.26100.8951) checks passed on
+Windows ARM64 against the Release source at `82700dbf9`. The unmodified
+InlineTranscript example was launched directly in a dedicated conhost window;
+no commands were typed into a terminal GUI.
+
+| Check | Result |
+| --- | --- |
+| Initial render | Readable title, editable input, and status in the reserved three-row composer |
+| Caret editing | `helo`, Left, `l` submitted exactly one `you: hello` line and cleared the input |
+| Modified arrow | Ctrl+Left in `alpha beta`, then `X`, submitted `you: alpha Xbeta` |
+| Native paste and Unicode | Ctrl+V pasted `paste café 界 é 🙂 end`; submission printed once with the tested host/font |
+| Native selection/copy | Mark mode selected a completed line; clipboard readback matched `you: hello` |
+| Resize recovery | Maximize/restore reset the live region as documented; subsequent editing and insertion passed |
+| Normal Escape | The example and its dedicated host exited without further GUI input |
+
+An isolated test-only copy of the example exercised history and cancellation
+against the same library source. It printed 20 preceding console lines and two
+sentinels before initialization, kept the composer open after message 023, and
+offered a slower producer for input/cancellation checks. These changes affected
+only the temporary probe, not the shipped example or library.
+
+The native accessibility document and native Select All/Copy clipboard readback
+each contained both preceding sentinels and messages 000 through 023 exactly once
+and in order. Native scrolling revealed earlier console output. The three-row
+composer remained visible and editable while the producer was active; caret
+editing and submission during streaming produced `you: hello` once.
+
+An instrumented early-Escape run completed 6 of 24 messages, cancelled remaining
+producer output, and exited with code 0. A separate teardown run also exited with
+code 0 and restored the console state captured before initialization:
+
+| State | Before initialization | After disposal |
+| --- | --- | --- |
+| Input mode | 503 | 503 |
+| Output mode | 3 | 3 |
+| Cursor visible | true | true |
+
+No Terminal.Gui defect was found in these checks, so no production code changed.
+The existing resize clear/reset limitation remains; this pass does not claim
+preservation across resize or coverage of every font and Unicode sequence.
+
+Windows Terminal 1.25.2733.0 launched the example in dedicated test windows, but
+the Windows computer-use tool did not return either window in its target list,
+including after the user brought one forward. No Windows Terminal GUI input was
+attempted. Its native rendering, input, history/copy, and resize checks remain
+unverified; passing ConPTY tests does not substitute for this coverage. Linux
+PTY validation also remains outstanding.
+
+All reported non-skipped CI checks passed on `82700dbf9`, including Windows,
+Linux, and macOS unit/integration jobs, Windows/Linux builds, Linux performance
+smoke tests, and documentation checks. The benchmark job was skipped.

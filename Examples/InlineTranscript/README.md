@@ -16,14 +16,18 @@ The accompanying [cast](InlineTranscript.cast) was recorded in a macOS PTY with 
 cursor-position replies and replayed into a history-aware terminal model. The numbered
 messages and both preceding shell sentinels occur once and in order. The live composer
 retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
-[VALIDATION.md](VALIDATION.md); actual Windows Terminal/conhost window rendering
-remains outstanding.
+[VALIDATION.md](VALIDATION.md). Native conhost rendering, editing, Unicode paste,
+history copying, resize recovery, and teardown checks also passed. Native Windows
+Terminal checks remain outstanding because the computer-use tool did not expose
+its running test windows.
 
 ## Windows Terminal and conhost checks
 
 The automated ConPTY and WinPTY checks validate output streams and a terminal
-history model. Native host rendering, input, and scrollback selection still
-require an interactive pass in each host.
+history model. An interactive pass in classic conhost also passed on Windows
+ARM64; see [validation details](VALIDATION.md#native-conhost-checks-2026-10-15).
+Windows Terminal still requires its own native pass. To repeat the native checks,
+follow the steps below in each host.
 
 To check Windows Terminal, run these PowerShell commands from the repository root:
 
