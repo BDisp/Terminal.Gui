@@ -1052,3 +1052,9 @@ Color? result = app.Run (wrapper).Result;
 - [Mouse](mouse.md) - Mouse handling through View.App  
 - [Drivers](drivers.md) - Driver access through View.Driver
 - [Multitasking](multitasking.md) - Session management with SessionStack
+
+## Output above a live inline region
+
+To print completed styled text above an inline UI, await `app.PrintAboveAsync(...)`.
+See [Printing above an inline application](inline-output.md) for ordering, cancellation,
+supported output, and partial-write behavior.

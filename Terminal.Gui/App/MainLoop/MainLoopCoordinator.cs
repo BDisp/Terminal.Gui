@@ -15,7 +15,7 @@ namespace Terminal.Gui.App;
 ///     <para>This class is designed to be managed by <see cref="ApplicationImpl"/></para>
 /// </summary>
 /// <typeparam name="TInputRecord">Type of raw input events, e.g. <see cref="ConsoleKeyInfo"/> for .NET driver</typeparam>
-internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator where TInputRecord : struct
+internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator, IInlineRenderCoordinator where TInputRecord : struct
 {
     /// <summary>
     ///     Creates a new coordinator that will manage the main UI loop and input thread.
@@ -92,38 +92,53 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator where TI
     {
         lock (_oLockInitialization)
         {
+            if (_stopCalled)
+            {
+                return;
+            }
             _loop.Iteration ();
+        }
+    }
+
+    int IInlineRenderCoordinator.InitialCursorRow => _loop.SizeMonitor.InitialCursorRow;
+
+    void IInlineRenderCoordinator.WithRenderGate (Action action)
+    {
+        lock (_oLockInitialization)
+        {
+            if (_stopCalled)
+            {
+                return;
+            }
+            action ();
         }
     }
 
     /// <inheritdoc/>
     public void Stop ()
     {
-        // Ignore repeated calls to Stop - happens if user spams Application.Shutdown().
-        if (_stopCalled)
+        lock (_oLockInitialization)
         {
-            return;
-        }
-
-        _stopCalled = true;
-
-        // Restore terminal kitty keyboard mode before shutting down output resources.
-
-        try
-        {
-            if (_driver is { KittyKeyboardCapabilities.IsSupported: true })
+            if (_stopCalled)
             {
-                KittyKeyboardProtocolDetector kittyKeyboardDetector = new (_driver);
-                kittyKeyboardDetector.Disable ();
+                return;
             }
+            _stopCalled = true;
+            try
+            {
+                if (_driver is { KittyKeyboardCapabilities.IsSupported: true })
+                {
+                    KittyKeyboardProtocolDetector kittyKeyboardDetector = new (_driver);
+                    kittyKeyboardDetector.Disable ();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.Warning ($"Kitty keyboard protocol disable failed: {ex.Message}");
+            }
+            _runCancellationTokenSource.Cancel ();
+            _output?.Dispose ();
         }
-        catch (Exception ex)
-        {
-            Logging.Warning ($"Kitty keyboard protocol disable failed: {ex.Message}");
-        }
-
-        _runCancellationTokenSource.Cancel ();
-        _output?.Dispose ();
 
         // Wait for input infinite loop to exit
         _inputTask?.Wait ();
