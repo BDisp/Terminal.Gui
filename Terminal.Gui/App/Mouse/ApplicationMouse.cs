@@ -59,8 +59,50 @@ internal class ApplicationMouse : IMouse, IDisposable
     /// <inheritdoc/>
     public Point? LastMousePosition { get; set; }
 
+    private bool _isMouseDisabled;
+
     /// <inheritdoc/>
-    public bool IsMouseDisabled { get; set; }
+    public bool IsMouseDisabled
+    {
+        get => _isMouseDisabled;
+        set
+        {
+            if (_isMouseDisabled == value)
+            {
+                return;
+            }
+
+            if (App is ApplicationImpl { Initialized: true } app)
+            {
+                (app.Coordinator as IMouseReportingCoordinator)?.SetMouseDisabled (value);
+            }
+
+            _isMouseDisabled = value;
+            if (!value)
+            {
+                return;
+            }
+
+            View? grabbed = null;
+            _mouseGrabViewRef?.TryGetTarget (out grabbed);
+            _mouseGrabViewRef = null;
+            grabbed?.MouseHoldRepeater?.Stop ();
+            if (grabbed is { })
+            {
+                grabbed.MouseState = MouseState.None;
+                RaiseUnGrabbedMouseEvent (grabbed);
+            }
+
+            View? [] hovered = [.. CachedViewsUnderMouse];
+            CachedViewsUnderMouse.Clear ();
+            _activePopoverAtPress = null;
+            _dismissedByMousePress = null;
+            foreach (View? view in hovered)
+            {
+                view?.NewMouseLeaveEvent ();
+            }
+        }
+    }
 
     /// <inheritdoc/>
     public List<View?> CachedViewsUnderMouse { get; } = [];

@@ -25,6 +25,12 @@ public interface IMouse : IMouseGrabHandler
     /// <summary>
     ///     Gets or sets whether the mouse is disabled. The mouse is enabled by default.
     /// </summary>
+    /// <remarks>
+    ///     With the built-in ANSI driver, this also disables terminal mouse reporting so native text selection is
+    ///     available. To avoid enabling reporting at startup, set this property before <see cref="IApplication.Init"/>.
+    ///     To change it during a session, use the UI thread or <see cref="IApplication.Invoke(Action)"/>.
+    ///     Disabling releases any mouse grab and stops hold repetition. Other drivers only suppress event delivery.
+    /// </remarks>
     bool IsMouseDisabled { get; set; }
 
     /// <summary>
