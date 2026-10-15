@@ -19,20 +19,22 @@ retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
 [VALIDATION.md](VALIDATION.md). Native conhost rendering, editing, Unicode paste,
 history copying, resize recovery, and teardown checks also passed. Application
 checks inside real Windows Terminal sessions passed at 100x45, 50x12, and 50x3.
-A user-provided Windows Terminal screenshot also confirmed the initial layout.
-Live rendering during insertion, native clipboard/selection, physical keyboard
-input, and window-resize interaction remain unverified because the computer-use
-tool blocks that host.
+Native Windows Terminal GUI checks also passed: live rendering during insertion,
+native scrollback and Select All/copy, physical keyboard editing during output,
+paste, maximize/restore, and Escape with pending output. Windows console input
+replaces non-BMP characters, such as emoji, with U+FFFD before the ANSI driver
+reads them; see [validation details](VALIDATION.md#native-windows-terminal-gui-checks-2026-10-15).
 
 ## Windows Terminal and conhost checks
 
 The automated ConPTY and WinPTY checks validate output streams and a terminal
 history model. An interactive pass in classic conhost also passed on Windows
 ARM64; see [validation details](VALIDATION.md#native-conhost-checks-2026-10-15).
-Windows Terminal application-level results are recorded
-[separately](VALIDATION.md#windows-terminal-application-checks-2026-10-15); its
-native GUI checks still require a manual pass. To repeat the native checks,
-follow the steps below in each host.
+Windows Terminal application-level and
+[native GUI](VALIDATION.md#native-windows-terminal-gui-checks-2026-10-15) results
+are recorded separately. To repeat the native checks, follow the steps below in
+each host. Launch with `NO_COLOR` unset; when it is set, Terminal.Gui uses
+16-color output by design.
 
 To check Windows Terminal, run these PowerShell commands from the repository root:
 

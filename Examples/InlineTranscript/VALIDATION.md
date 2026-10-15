@@ -287,3 +287,67 @@ also remains outstanding.
 
 All reported non-skipped CI checks also passed on documentation head `e4a99fdac`;
 the benchmark job was skipped.
+
+## Native Windows Terminal GUI checks: 2026-10-15
+
+Native GUI checks passed in Windows Terminal 1.25.2733.0 on Windows ARM64
+(Windows 11 build 26340) against the library source at `2ae6ed249`. The default
+profile used the Solarized Dark scheme. Each run launched the probe directly
+with `wt.exe` in a dedicated 100x30 window; no commands were typed into a
+terminal GUI. The computer-use tool granted Windows Terminal at its "click"
+tier, so the agent captured screenshots, clicked the scrollbar and caption
+buttons, and read the clipboard. The user pressed the keys and made the native
+selection. A probe log recorded the keys, text changes, submissions, and console
+state that the application received.
+
+The isolated test-only probe used the example's composer and producer, with
+these changes:
+
+- It printed 20 console lines and two sentinels before initialization, and
+  `SHELL AFTER` after disposal.
+- `--delay` set the producer interval (1.5, 6, or 15 seconds), and `--hold`
+  kept the composer open after message 023.
+- It logged keys, text changes, submissions, resolved input colors, and console
+  modes and cursor visibility before and after the application.
+- After disposal, it waited without reading input so the window remained
+  observable.
+
+The shipped example and library were not changed.
+
+| Check | Result |
+| --- | --- |
+| Styled output above the composer | Messages appeared above the three-row composer during insertion; the title, input row, and status remained readable |
+| Native scrollback | Scrollbar paging showed all 20 console lines, both sentinels, and messages 000-023 once and in order |
+| Native selection/copy | WT Select All and copy returned 82 lines: the console lines, sentinels, and all 24 messages, each once and in order |
+| Physical keyboard during output | `helo`, Left, and a character inserted before `o`; Ctrl+Left in `alpha beta`, then `X`, produced `alpha Xbeta`; Backspace and Enter worked; each submission printed once and cleared the input |
+| Paste during output | Ctrl+V pasted `paste café 界 é` intact; the emoji arrived as two U+FFFD characters (see below) |
+| Resize recovery | Maximize and restore reset the live region as documented; the composer redrew and later input worked |
+| Normal Escape | Escape after message 023 ended the session; the producer completed 24/24 |
+| Escape with output pending | Escape after message 002 cancelled the producer with 3/24 messages printed; `hi`, submitted first, printed once |
+| Teardown | Every run restored input mode 503, output mode 7, a visible cursor, and the 100x30 size; exit code 0 |
+
+Each resize clear left stale composer frames in Windows Terminal scrollback. The
+copied text contained three title rows after one maximize and restore, but each
+message appeared only once. This follows from the existing documented resize
+clear/reset limitation.
+
+The first WT runs inherited `NO_COLOR=1` from the agent's environment.
+Terminal.Gui then selected `NoColor` capability, forced 16-color output, and
+skipped OSC 10/11 detection. Solarized Dark rendered bold ANSI green as its gray
+"bright green". It also rendered the text field's editable role (bright white
+on white) nearly invisibly. With `NO_COLOR` unset, the probe detected TrueColor
+and the terminal colors `#839496` on `#002B36`. Prefixes then rendered green,
+and the input row was `#839496` on `#0C0E0E`. No Terminal.Gui change was
+required; `NO_COLOR` handling is intentional.
+
+The emoji replacement is a Windows console input limitation that predates this
+PR, which does not change the input path. A raw `ReadFile` probe under ConPTY,
+using input code page 65001 and VT input, received `61 EF BF BD EF BF BD 62` for
+`a🙂b`; `界` arrived intact. Typed and bracketed-paste input through Terminal.Gui
+produced the same two U+FFFD characters. Native conhost was not retested for
+non-BMP characters.
+
+Native Shift+drag selection did not select text on the first attempt,
+possibly because the window was not focused. WT Select All and copy succeeded
+after the window was focused. Mouse-mode selection bypass was not otherwise
+investigated. Linux PTY validation remains outstanding.
