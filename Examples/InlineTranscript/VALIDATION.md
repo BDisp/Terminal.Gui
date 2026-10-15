@@ -273,9 +273,13 @@ failure. Normal and early-stop runs restored the original input mode (503),
 output mode (7), and visible cursor; the 50x12 and 50x3 runs also retained their
 original console dimensions after disposal.
 
+The user's screenshot of the unmodified example in `PR5715-WT-Native` also showed
+the expected initial title, input row, and status line without overlap. This
+confirms the initial layout only; it does not show output insertion or resize.
+
 No Terminal.Gui defect was found, so no production code changed. These checks
 exercise real terminal startup/output and application input handling, but do not
-verify the host's physical keyboard translation, visual/font rendering, native
+verify the host's physical keyboard translation, live rendering/font behavior, native
 clipboard/selection, frontend scrollback, or interactive resize. The computer-use
 API still returned `product policy blocks this app` for Windows Terminal after
 the Full Access retry; those GUI checks remain unverified. Linux PTY validation

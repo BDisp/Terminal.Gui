@@ -19,7 +19,8 @@ retains its reserved height. ConPTY and WinPTY bridge checks are recorded in
 [VALIDATION.md](VALIDATION.md). Native conhost rendering, editing, Unicode paste,
 history copying, resize recovery, and teardown checks also passed. Application
 checks inside real Windows Terminal sessions passed at 100x45, 50x12, and 50x3.
-Windows Terminal visual inspection, native clipboard/selection, physical keyboard
+A user-provided Windows Terminal screenshot also confirmed the initial layout.
+Live rendering during insertion, native clipboard/selection, physical keyboard
 input, and window-resize interaction remain unverified because the computer-use
 tool blocks that host.
 
