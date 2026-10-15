@@ -71,6 +71,7 @@ internal sealed class WindowsVTInputHelper : IDisposable
     private const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
     private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
 
+    private static int _wakeVersion;
     private uint _originalConsoleMode;
     private bool _disposed;
 
@@ -177,6 +178,7 @@ internal sealed class WindowsVTInputHelper : IDisposable
             // enabled, the Windows console converts all input (keyboard, mouse, etc.)
             // into ANSI escape sequences in this stream. ReadFile is not used because the console
             // host's code page conversion replaces non-BMP characters (surrogate pairs) with U+FFFD.
+            int wakeVersion = Volatile.Read (ref _wakeVersion);
             bool success = ReadConsoleW (InputHandle, buffer, (uint)buffer.Length, out uint numCharsRead, nint.Zero);
 
             if (!success)
@@ -195,10 +197,17 @@ internal sealed class WindowsVTInputHelper : IDisposable
 
             if (numCharsRead == 0)
             {
+                // A cancelled ReadConsoleW can succeed with zero characters. Do not turn a shutdown
+                // wake-up into Ctrl+Z. The version is published before CancelIoEx can release the read.
+                if (wakeVersion != Volatile.Read (ref _wakeVersion))
+                {
+                    return false;
+                }
+
                 // Workaround for Windows bug (since Win8, fix pending in microsoft/terminal#19940):
                 // the console treats Ctrl+Z as EOF and returns 0 characters, even when
                 // ENABLE_PROCESSED_INPUT is disabled. Since we have a live console handle with
-                // processed input disabled, a 0-char success can only mean this bug.
+                // processed input disabled and no concurrent wake-up, preserve the Ctrl+Z workaround.
                 // Synthesize the 0x1A (SUB) character that should have been returned.
                 // See https://github.com/microsoft/terminal/issues/4958
                 buffer [0] = '\u001a';
@@ -274,6 +283,8 @@ internal sealed class WindowsVTInputHelper : IDisposable
         {
             return;
         }
+
+        Interlocked.Increment (ref _wakeVersion);
 
         if (CancelIoEx (inputHandle, nint.Zero))
         {

@@ -15,7 +15,7 @@ namespace Terminal.Gui.Drivers;
 ///         Supports both test injection via <see cref="ITestableInput{TInputRecord}"/> and real console reading.
 ///     </para>
 ///     <para>
-///         This driver reads raw bytes from different sources depending on platform and processes them as
+///         This driver reads character input from different sources depending on platform and processes it as
 ///         ANSI escape sequences. It configures the terminal for proper ANSI input:
 ///     </para>
 ///     <list type="bullet">
@@ -51,7 +51,7 @@ namespace Terminal.Gui.Drivers;
 ///         <b>Architecture:</b>
 ///     </para>
 ///     <para>
-///         Reads raw bytes from platform-specific APIs, converts them to UTF-8 characters,
+///         Reads UTF-16 code units on Windows or decodes UTF-8 bytes on Unix/Mac,
 ///         and feeds them to <see cref="AnsiResponseParser{TInputRecord}"/> which extracts keyboard events,
 ///         mouse events (SGR format), and terminal responses.
 ///     </para>
@@ -193,7 +193,7 @@ public class AnsiInput : InputImpl<char>, ITestableInput<char>
         switch (_platform)
         {
             case AnsiPlatform.WindowsVT:
-                var chars = new char [256];
+                char [] chars = new char [256];
 
                 if (!_windowsVTInput!.TryRead (chars, out int charsRead))
                 {
