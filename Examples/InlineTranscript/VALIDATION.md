@@ -197,7 +197,7 @@ no commands were typed into a terminal GUI.
 | Initial render | Readable title, editable input, and status in the reserved three-row composer |
 | Caret editing | `helo`, Left, `l` submitted exactly one `you: hello` line and cleared the input |
 | Modified arrow | Ctrl+Left in `alpha beta`, then `X`, submitted `you: alpha Xbeta` |
-| Native paste and Unicode | Ctrl+V pasted `paste café 界 é 🙂 end`; submission printed once with the tested host/font |
+| Native paste and Unicode | BMP/combining paste and submission passed; the earlier native emoji-paste claim is unverified pending a conhost retest after the Windows VT input finding below |
 | Native selection/copy | Mark mode selected a completed line; clipboard readback matched `you: hello` |
 | Resize recovery | Maximize/restore reset the live region as documented; subsequent editing and insertion passed |
 | Normal Escape | The example and its dedicated host exited without further GUI input |
