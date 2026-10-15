@@ -71,7 +71,6 @@ internal sealed class WindowsVTInputHelper : IDisposable
     private const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
     private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
 
-    private static int _wakeVersion;
     private uint _originalConsoleMode;
     private bool _disposed;
 
@@ -159,7 +158,7 @@ internal sealed class WindowsVTInputHelper : IDisposable
     /// </summary>
     /// <param name="buffer">Buffer to read UTF-16 code units into.</param>
     /// <param name="charsRead">Number of UTF-16 code units actually read.</param>
-    /// <returns>True if read succeeded; false otherwise.</returns>
+    /// <returns>True if at least one code unit was read; false if the read failed, was cancelled, or returned no input.</returns>
     /// <remarks>
     ///     A surrogate pair may be split across two reads; callers must treat the result as a stream of code units.
     /// </remarks>
@@ -178,7 +177,6 @@ internal sealed class WindowsVTInputHelper : IDisposable
             // enabled, the Windows console converts all input (keyboard, mouse, etc.)
             // into ANSI escape sequences in this stream. ReadFile is not used because the console
             // host's code page conversion replaces non-BMP characters (surrogate pairs) with U+FFFD.
-            int wakeVersion = Volatile.Read (ref _wakeVersion);
             bool success = ReadConsoleW (InputHandle, buffer, (uint)buffer.Length, out uint numCharsRead, nint.Zero);
 
             if (!success)
@@ -195,25 +193,13 @@ internal sealed class WindowsVTInputHelper : IDisposable
                 return false;
             }
 
+            // Zero characters means the read was cancelled by WakePendingRead (CancelIoEx can complete
+            // ReadConsoleW successfully with no data). Unlike ReadFile, ReadConsoleW never converts Ctrl+Z
+            // into a zero-length EOF read: the console host only applies that to raw (ReadFile) reads, so
+            // Ctrl+Z arrives as 0x1A. See https://github.com/microsoft/terminal/issues/4958
             if (numCharsRead == 0)
             {
-                // A cancelled ReadConsoleW can succeed with zero characters. Do not turn a shutdown
-                // wake-up into Ctrl+Z. The version is published before CancelIoEx can release the read.
-                if (wakeVersion != Volatile.Read (ref _wakeVersion))
-                {
-                    return false;
-                }
-
-                // Workaround for Windows bug (since Win8, fix pending in microsoft/terminal#19940):
-                // the console treats Ctrl+Z as EOF and returns 0 characters, even when
-                // ENABLE_PROCESSED_INPUT is disabled. Since we have a live console handle with
-                // processed input disabled and no concurrent wake-up, preserve the Ctrl+Z workaround.
-                // Synthesize the 0x1A (SUB) character that should have been returned.
-                // See https://github.com/microsoft/terminal/issues/4958
-                buffer [0] = '\u001a';
-                charsRead = 1;
-
-                return true;
+                return false;
             }
 
             charsRead = (int)numCharsRead;
@@ -283,8 +269,6 @@ internal sealed class WindowsVTInputHelper : IDisposable
         {
             return;
         }
-
-        Interlocked.Increment (ref _wakeVersion);
 
         if (CancelIoEx (inputHandle, nint.Zero))
         {

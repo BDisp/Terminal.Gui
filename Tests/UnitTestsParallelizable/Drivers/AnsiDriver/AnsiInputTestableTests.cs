@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Text;
 
 namespace DriverTests.AnsiHandling;
 
@@ -713,54 +712,38 @@ public class AnsiInputTestableTests
 
     #region Encoding Tests (Issue #4582)
 
-    // Claude - Opus 4.6
+    // Claude - Opus 5.5
     [Fact]
-    public void AnsiInput_ReadBytes_AccentedChars_DecodesCorrectly ()
+    public void AnsiInput_ProcessQueue_AccentedChars_ProduceMatchingKeys ()
     {
-        // Issue #4582: On Windows, ReadFile returns bytes in the console's input code page
-        // (e.g. Windows-1252), NOT UTF-8. The Read() method must use the correct encoding.
-        //
-        // In Windows-1252: 'á' = 0xE1 (single byte)
-        // In UTF-8:        'á' = 0xC3 0xA1 (two bytes)
-        //
-        // When ReadFile returns 0xE1 and we decode with UTF-8, it sees an incomplete
-        // 3-byte sequence start (0xE1 expects two continuation bytes) → replacement char '�'
+        // Issue #4582: accented characters became U+FFFD when Windows input bytes were decoded with the
+        // wrong code page. Windows now reads UTF-16 code units directly (ReadConsoleW), so the characters
+        // must reach KeyDown unchanged.
+        const string ACCENTED = "áéíóúñüàèìòùâêîôû";
 
-        Encoding.RegisterProvider (CodePagesEncodingProvider.Instance);
-        var windows1252 = Encoding.GetEncoding (1252);
+        AnsiInput ansiInput = new ();
+        ConcurrentQueue<char> queue = new ();
+        ansiInput.Initialize (queue);
 
-        // Simulate what ReadFile returns on a Windows-1252 console for accented chars
-        char [] accentedChars =
-        [
-            'á',
-            'é',
-            'í',
-            'ó',
-            'ú',
-            'ñ',
-            'ü',
-            'à',
-            'è',
-            'ì',
-            'ò',
-            'ù',
-            'â',
-            'ê',
-            'î',
-            'ô',
-            'û'
-        ];
+        AnsiInputProcessor processor = new (queue);
+        processor.InputImpl = ansiInput;
 
-        foreach (char expected in accentedChars)
+        List<Key> receivedKeys = [];
+        processor.KeyDown += (_, k) => receivedKeys.Add (k);
+
+        foreach (char ch in ACCENTED)
         {
-            // Get the bytes as ReadFile would return them (in Windows-1252)
-            byte [] codePageBytes = windows1252.GetBytes (expected.ToString ());
+            ((ITestableInput<char>)ansiInput).InjectInput (ch);
+        }
 
-            // OLD (bug): Encoding.UTF8.GetString (codePageBytes) produces '�' for accented chars
-            // FIX: Use the console's input code page encoding to decode ReadFile bytes
-            string decoded = windows1252.GetString (codePageBytes);
+        SimulateInputThread (ansiInput, queue);
+        processor.ProcessQueue ();
 
-            Assert.Equal (expected.ToString (), decoded);
+        Assert.Equal (ACCENTED.Length, receivedKeys.Count);
+
+        for (var i = 0; i < ACCENTED.Length; i++)
+        {
+            Assert.Equal (new Key (ACCENTED [i]), receivedKeys [i]);
         }
     }
 
