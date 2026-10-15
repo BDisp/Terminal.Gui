@@ -11,6 +11,7 @@ internal partial class ApplicationImpl
     private readonly Lock _dispatchLock = new ();
     private readonly LinkedList<UiDispatchOperation> _queuedDispatches = new ();
     private readonly LinkedList<PostedCallback> _postedCallbacks = new ();
+    private readonly AsyncLocal<bool> _isPumpingPostedWork = new ();
     private bool _dispatchStopping;
 
     Task IApplicationAsyncDispatcher.InvokeAsync (Action<IApplication> action, SessionToken? owner, CancellationToken cancellationToken) =>
@@ -210,22 +211,27 @@ internal partial class ApplicationImpl
 
     /// <summary>
     ///     INTERNAL: Runs <see cref="MainLoopSyncContext"/> work on the UI thread. Work posted while the loop can pump
-    ///     waits for <see cref="DrainDispatches"/>; if the loop stops first, it moves to the thread pool so awaiters are
-    ///     not stranded (#5636).
+    ///     waits for <see cref="DrainDispatches"/>. A newly started session that has not ended another session and uses
+    ///     Begin without Run pumps one iteration on the posting thread; if the loop stops first, the work moves to the
+    ///     thread pool so awaiters are not stranded.
     /// </summary>
-    internal void PostToMainLoop (SendOrPostCallback callback, object? state)
+    internal void PostToMainLoop (SendOrPostCallback callback, object? state, bool pumpWithoutRunLoop = true)
     {
         bool runNow;
+        bool queued;
+        bool pumpPostedWork;
 
         lock (_dispatchLock)
         {
             runNow = CanStartUiWork;
+            queued = false;
+            pumpPostedWork = false;
 
             if (!runNow && CanPumpPostedWork)
             {
                 _postedCallbacks.AddLast (new PostedCallback (callback, state));
-
-                return;
+                queued = true;
+                pumpPostedWork = pumpWithoutRunLoop && !IsRunLoopRunning && !HasEndedSession;
             }
         }
 
@@ -237,7 +243,43 @@ internal partial class ApplicationImpl
             return;
         }
 
+        // Begin can start a session without entering Run. In that case no UI loop exists to drain a continuation
+        // posted by await, so execute one iteration on the posting thread.
+        if (pumpPostedWork && PumpPostedWork ())
+        {
+            return;
+        }
+
+        if (queued)
+        {
+            return;
+        }
+
         RunOnThreadPool (callback, state);
+    }
+
+    private bool PumpPostedWork ()
+    {
+        if (Coordinator is not { } coordinator || IsRunLoopRunning)
+        {
+            return false;
+        }
+
+        _isPumpingPostedWork.Value = true;
+        SynchronizationContext? previousContext = System.Threading.SynchronizationContext.Current;
+        System.Threading.SynchronizationContext.SetSynchronizationContext (SynchronizationContext);
+
+        try
+        {
+            coordinator.RunIteration ();
+
+            return true;
+        }
+        finally
+        {
+            System.Threading.SynchronizationContext.SetSynchronizationContext (previousContext);
+            _isPumpingPostedWork.Value = false;
+        }
     }
 
     private bool TryTakePostedCallback (out PostedCallback posted)

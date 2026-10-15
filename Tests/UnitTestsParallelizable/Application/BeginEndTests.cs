@@ -869,4 +869,120 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
             app.Dispose ();
         }
     }
+
+    [Fact]
+    public async Task Await_After_Begin_Always_Resumes ()
+    {
+        IApplication app = Application.Create ();
+        app.Init (DriverRegistry.Names.ANSI);
+        app.Screen = new Rectangle (0, 0, 80, 24);
+
+        int? currentManagedThreadId = null;
+        var view = new Window ();
+        var mouseEventHandled = false;
+
+        view.MouseEvent += (_, _) =>
+                           {
+                               mouseEventHandled = true;
+                               Assert.Equal (currentManagedThreadId, Thread.CurrentThread.ManagedThreadId);
+                           };
+        var botton = new Button { X = 1, Text = "Click Me" };
+        var bottonClicked = false;
+
+        botton.Accepted += (_, _) =>
+                           {
+                               bottonClicked = true;
+                               Assert.Equal (currentManagedThreadId, Thread.CurrentThread.ManagedThreadId);
+                           };
+        view.Add (botton);
+        var actionLambdaMessage = "";
+
+        Action actionLambda = () =>
+                        {
+                            actionLambdaMessage = "Action Lambda executed";
+                            Assert.Equal (currentManagedThreadId, Thread.CurrentThread.ManagedThreadId);
+                        };
+        var actionMethodMessage = "";
+
+        SessionToken? sessionToken = app.Begin (view); // installs MainLoopSyncContext on this thread
+        app.LayoutAndDraw ();
+
+        Assert.NotNull (sessionToken);
+        Assert.Equal (app.MainThreadId, Thread.CurrentThread.ManagedThreadId);
+
+        // SynchronizationContext.Current is now Terminal.Gui.App.MainLoopSyncContext
+        Assert.Equal ("MainLoopSyncContext", SynchronizationContext.Current!.GetType ().Name);
+
+        await Task.Run (() =>
+                        {
+                            currentManagedThreadId = Thread.CurrentThread.ManagedThreadId;
+
+                            app.Invoke (() => app.Mouse.RaiseMouseEvent (new Mouse
+                            {
+                                ScreenPosition = new Point (1, 1), Flags = MouseFlags.LeftButtonPressed
+                            }));
+                            DateTime now = DateTime.Now;
+                            Thread.Sleep (50);
+                            TimeSpan elapsed = DateTime.Now - now;
+                            Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
+                        }); // continuation posts to the toolkit
+
+        Assert.True (mouseEventHandled);
+
+        await Task.Run (() =>
+                        {
+                            currentManagedThreadId = Thread.CurrentThread.ManagedThreadId;
+
+                            app.Invoke (() => app.Mouse.RaiseMouseEvent (new Mouse
+                            {
+                                ScreenPosition = new Point (2, 1), Flags = MouseFlags.LeftButtonClicked
+                            }));
+                            DateTime now = DateTime.Now;
+                            Thread.Sleep (50);
+                            TimeSpan elapsed = DateTime.Now - now;
+                            Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
+                        }); // continuation posts to the toolkit
+
+        Assert.True (bottonClicked);
+
+        await Task.Run (() =>
+                        {
+                            currentManagedThreadId = Thread.CurrentThread.ManagedThreadId;
+                            app.Invoke (actionLambda);
+                            DateTime now = DateTime.Now;
+                            Thread.Sleep (50);
+                            TimeSpan elapsed = DateTime.Now - now;
+                            Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
+                        }); // continuation posts to the toolkit
+
+        Assert.Equal ("Action Lambda executed", actionLambdaMessage);
+
+        await Task.Run (() =>
+                        {
+                            currentManagedThreadId = Thread.CurrentThread.ManagedThreadId;
+                            ActionMethod ();
+                            DateTime now = DateTime.Now;
+                            Thread.Sleep (50);
+                            TimeSpan elapsed = DateTime.Now - now;
+                            Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
+                        }); // continuation posts to the toolkit
+
+        Assert.Equal ("Action Method executed", actionMethodMessage);
+
+        // Reached: the continuation still sits in the toolkit
+        app.End (sessionToken);
+
+        // After End, the toolkit has been torn down, so SynchronizationContext.Current is null
+        Assert.Null (SynchronizationContext.Current);
+
+        app.Dispose ();
+
+        return;
+
+        void ActionMethod ()
+        {
+            actionMethodMessage = "Action Method executed";
+            Assert.Equal (currentManagedThreadId, Thread.CurrentThread.ManagedThreadId);
+        }
+    }
 }
