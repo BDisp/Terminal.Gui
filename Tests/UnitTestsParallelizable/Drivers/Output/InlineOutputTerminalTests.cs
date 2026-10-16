@@ -156,6 +156,39 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void ModalRegrowthAfterShrink_RendersAtScrolledOriginWithoutClipping ()
+    {
+        Grid terminal = new (20, 8);
+        terminal.Rows [0] = "SHELL ZERO".PadRight (20).ToCharArray ();
+        terminal.Rows [1] = "SHELL ONE".PadRight (20).ToCharArray ();
+        AnsiOutput output = new (chunk => { terminal.Feed (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (20, 8);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output)) { AppModel = AppModel.Inline, ForceInlinePosition = new Point (0, 2) };
+        app.Init ();
+        using Runnable outer = new () { Width = Dim.Fill (), Height = 6, Text = "outer" };
+        SessionToken outerOwner = app.Begin (outer)!;
+        app.LayoutAndDraw ();
+        using Runnable modal = new () { Y = 1, Width = Dim.Fill (), Height = 4 };
+        SessionToken modalOwner = app.Begin (modal)!;
+        outer.Height = 2;
+        app.LayoutAndDraw ();
+        modal.Height = 1;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+
+        modal.Height = 7;
+        modal.Text = "M0\nM1\nM2\nM3\nM4\nM5\nM6";
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, 0, 20, 8), app.Screen);
+        Assert.Equal (["SHELL ZERO", "SHELL ONE"], terminal.History);
+        Assert.Equal (["outer", .. Enumerable.Range (0, 7).Select (index => $"M{index}")], terminal.Rows.Select (row => new string (row).TrimEnd ()));
+        app.End (modalOwner);
+        app.End (outerOwner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {

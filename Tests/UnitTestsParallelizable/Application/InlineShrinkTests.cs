@@ -159,7 +159,7 @@ public class InlineShrinkTests
     }
 
     [Fact]
-    public void OffsetRunnable_ProtectsItsEntireFrame ()
+    public void OffsetRunnable_ProtectsItsEntireFrameDuringShrinkAndRegrowth ()
     {
         using ApplicationImpl app = Create (new StringBuilder (), out _);
         using Runnable outer = new () { Width = Dim.Fill (), Height = 8 };
@@ -171,7 +171,71 @@ public class InlineShrinkTests
         app.LayoutAndDraw ();
 
         Assert.Equal (4, app.Screen.Height);
+
+        outer.Height = 4;
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, 2, 20, 6), app.Screen);
+        Assert.Equal (6, app.Driver!.Rows);
         app.End (owner);
+    }
+
+    [Theory]
+    [InlineData (7, 8, 2)]
+    [InlineData (20, 12, 0)]
+    public void ActiveModal_CanShrinkAndRegrowBeyondOuterFrame (int height, int expectedHeight, int expectedOrigin)
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using Runnable outer = new () { Width = Dim.Fill (), Height = 8 };
+        SessionToken outerOwner = app.Begin (outer)!;
+        app.LayoutAndDraw ();
+        using Runnable modal = new () { Y = 1, Width = Dim.Fill (), Height = 4 };
+        SessionToken modalOwner = app.Begin (modal)!;
+        outer.Height = 2;
+        app.LayoutAndDraw ();
+        Assert.Equal (5, app.Screen.Height);
+
+        modal.Height = 1;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+
+        modal.Height = height;
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, expectedOrigin, 20, expectedHeight), app.Screen);
+        Assert.Equal (expectedHeight, app.Driver!.Rows);
+        Assert.Equal (new Point (0, expectedOrigin), app.Driver.InlinePosition);
+        app.End (modalOwner);
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+        app.End (outerOwner);
+    }
+
+    [Fact]
+    public void HiddenModal_DoesNotGrowReservationUntilVisible ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using Runnable outer = new () { Width = Dim.Fill (), Height = 8 };
+        SessionToken outerOwner = app.Begin (outer)!;
+        app.LayoutAndDraw ();
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 5 };
+        SessionToken modalOwner = app.Begin (modal)!;
+        outer.Height = 2;
+        app.LayoutAndDraw ();
+        Assert.Equal (5, app.Screen.Height);
+
+        modal.Visible = false;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+        modal.Height = 9;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+
+        modal.Visible = true;
+        app.LayoutAndDraw ();
+        Assert.Equal (9, app.Screen.Height);
+        app.End (modalOwner);
+        app.End (outerOwner);
     }
 
     [Fact]

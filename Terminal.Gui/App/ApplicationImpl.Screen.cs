@@ -277,10 +277,14 @@ internal partial class ApplicationImpl
                 return;
             }
 
-            View? topView = views.LastOrDefault (v => v is { });
-
-            // Cap the view height at the terminal height — the inline region can never exceed it.
-            int viewHeight = Math.Min (topView?.Frame.Height ?? 0, Driver.Screen.Height);
+            // Match shrink's frame-bottom measurement: offsets and every visible active runnable need rows.
+            // Cap the reservation at the terminal height — the inline region can never exceed it.
+            int viewHeight = 0;
+            foreach (View runnable in SessionStack.Select (token => token.Runnable).OfType<View> ().Where (view => view.Visible))
+            {
+                long bottom = (long)runnable.Frame.Y + runnable.Frame.Height;
+                viewHeight = Math.Max (viewHeight, (int)Math.Clamp (bottom, 0, Driver.Screen.Height));
+            }
 
             if (viewHeight > Screen.Height)
             {
@@ -333,6 +337,7 @@ internal partial class ApplicationImpl
 
                 if (newHeight != Screen.Height)
                 {
+                    Driver.InlinePosition = new Point (0, newY);
                     Screen = new Rectangle (0, newY, Screen.Width, newHeight);
                     if (!PassIsValid ())
                     {
