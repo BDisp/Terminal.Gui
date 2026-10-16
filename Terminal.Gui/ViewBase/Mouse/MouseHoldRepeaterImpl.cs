@@ -90,6 +90,12 @@ internal sealed class MouseHoldRepeaterImpl : IMouseHoldRepeater
         _isDown = true;
         _mouseGrabber?.GrabMouse (_mouseGrabView);
 
+        // A grab callback can disable mouse handling and stop this repeater before startup resumes.
+        if (!_isDown)
+        {
+            return;
+        }
+
         // Use custom timeout if provided, otherwise default to SmoothAcceleratingTimeout
         if (_userTimeout != null)
         {

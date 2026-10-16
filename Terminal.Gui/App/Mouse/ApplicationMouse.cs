@@ -355,13 +355,19 @@ internal class ApplicationMouse : IMouse, IDisposable
 
         foreach (View? view in viewsToLeave)
         {
-            if (view is null)
+            // Remove before callbacks so reentrant disable cleanup cannot notify the same departure twice.
+            if (view is null || !CachedViewsUnderMouse.Remove (view))
             {
                 continue;
             }
 
             view.NewMouseLeaveEvent ();
-            CachedViewsUnderMouse.Remove (view);
+            if (!IsMouseDisabled)
+            {
+                continue;
+            }
+            view.MouseHoldRepeater?.Stop ();
+            view.MouseState = MouseState.None;
         }
 
         // Tell any views that are now under the mouse that the mouse has entered and add them to the list
@@ -482,7 +488,15 @@ internal class ApplicationMouse : IMouse, IDisposable
 
         foreach (View? view in hovered)
         {
-            view?.NewMouseLeaveEvent ();
+            if (view is null)
+            {
+                continue;
+            }
+
+            // A canceled grab can leave an active repeater on a hovered view without a grabbed view.
+            view.MouseHoldRepeater?.Stop ();
+            view.MouseState = MouseState.None;
+            view.NewMouseLeaveEvent ();
         }
     }
 

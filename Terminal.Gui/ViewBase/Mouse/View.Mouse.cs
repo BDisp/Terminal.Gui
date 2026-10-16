@@ -581,6 +581,12 @@ public partial class View // Mouse APIs
             }
         }
 
+        // Auto-grab callbacks (including UnGrabbedMouse) may have disabled the mouse.
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
+        }
+
         // 6. Command invocation
         // When ShouldAutoGrab: Pressed/Released invoke commands in HandleAutoGrabPress/Release, Clicked ungrabs
         // When MouseHoldRepeat: Only the configured event (Released or Clicked) invokes commands
@@ -684,6 +690,13 @@ public partial class View // Mouse APIs
 
     private void MouseHoldRepeaterOnMouseIsHeldDownTick (object? sender, CancelEventArgs<Mouse> e)
     {
+        // A repeater may no longer be in the hover cache when the mouse is disabled.
+        if (StopMouseProcessingIfDisabled ())
+        {
+            e.Cancel = true;
+            return;
+        }
+
         // Use the configured MouseHoldRepeat flags, defaulting to LeftButtonPressed if not set
         e.NewValue.Flags = MouseHoldRepeat ?? MouseFlags.LeftButtonPressed;
 
@@ -786,6 +799,11 @@ public partial class View // Mouse APIs
         // Update MouseState based on position
         UpdateMouseStateOnPress (mouse.Position);
 
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
+        }
+
         if (MouseHoldRepeat != null)
         {
             // Allow command invocation to proceed
@@ -819,6 +837,11 @@ public partial class View // Mouse APIs
 
         // Update MouseState
         UpdateMouseStateOnRelease ();
+
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
+        }
 
         if (MouseHoldRepeat != null)
         {

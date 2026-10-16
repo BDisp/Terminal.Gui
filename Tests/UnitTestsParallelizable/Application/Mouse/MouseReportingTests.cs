@@ -280,6 +280,191 @@ public class MouseReportingTests
         app.End (token);
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableAfterCanceledGrab_StopsRepeater (bool leaveBeforeDisable)
+    {
+        VirtualTimeProvider time = new ();
+        using ApplicationImpl app = Create (new StringBuilder (), timeProvider: time);
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed, MouseHoldRepeat = MouseFlags.LeftButtonReleased };
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        TimeSpan interval = TimeSpan.FromMilliseconds (100);
+        view.MouseHoldRepeater = new MouseHoldRepeaterImpl (view, app.TimedEvents, app.Mouse)
+        {
+            Timeout = new () { Span = interval, Callback = null! }
+        };
+        app.Mouse.GrabbingMouse += (_, e) => e.Cancel = true;
+        int activated = 0;
+        view.Activating += (_, e) =>
+        {
+            activated++;
+            e.Handled = true;
+        };
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Contains (view, app.Mouse.CachedViewsUnderMouse);
+        time.Advance (interval);
+        app.TimedEvents!.RunTimers ();
+        Assert.Equal (1, activated);
+        if (leaveBeforeDisable)
+        {
+            app.Mouse.RaiseMouseEnterLeaveEvents (new Point (10, 0), []);
+            Assert.DoesNotContain (view, app.Mouse.CachedViewsUnderMouse);
+        }
+
+        app.Mouse.IsMouseDisabled = true;
+        time.Advance (interval);
+        app.TimedEvents.RunTimers ();
+
+        Assert.Equal (1, activated);
+        Assert.Empty (app.TimedEvents.Timeouts);
+        Assert.Equal (MouseState.None, view.MouseState);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableFromPressedStateChanged_StopsStateAndCommands (bool repeat)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed };
+        view.MouseHoldRepeat = repeat ? MouseFlags.LeftButtonPressed : null;
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        view.MouseBindings.ReplaceCommands (MouseFlags.LeftButtonPressed, Command.Activate);
+        int activated = 0;
+        view.Activating += (_, e) =>
+        {
+            activated++;
+            e.Handled = true;
+        };
+        view.MouseStateChanged += (_, e) =>
+        {
+            if ((e.Value & MouseState.Pressed) == 0)
+            {
+                return;
+            }
+            app.Mouse.IsMouseDisabled = true;
+        };
+
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.Equal (MouseState.None, view.MouseState);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (0, activated);
+        Assert.Empty (app.TimedEvents!.Timeouts);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void DisableFromReleasedStateChanged_StopsStateAndCommands ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed };
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+        Assert.True (app.Mouse.IsGrabbed (view));
+        int activated = 0;
+        view.Activating += (_, e) =>
+        {
+            activated++;
+            e.Handled = true;
+        };
+        view.MouseStateChanged += (_, e) =>
+        {
+            if ((e.Value & MouseState.Pressed) != 0)
+            {
+                return;
+            }
+            app.Mouse.IsMouseDisabled = true;
+        };
+
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonReleased });
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.Equal (MouseState.None, view.MouseState);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (0, activated);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (MouseFlags.LeftButtonClicked)]
+    [InlineData (MouseFlags.LeftButtonDoubleClicked)]
+    [InlineData (MouseFlags.LeftButtonTripleClicked)]
+    public void DisableFromUngrabbedCallback_StopsClickCommands (MouseFlags click)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed };
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        view.MouseBindings.ReplaceCommands (click, Command.Activate);
+        int activated = 0;
+        view.Activating += (_, e) =>
+        {
+            activated++;
+            e.Handled = true;
+        };
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+        Assert.True (app.Mouse.IsGrabbed (view));
+        app.Mouse.UnGrabbedMouse += (_, _) => app.Mouse.IsMouseDisabled = true;
+
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = click });
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (0, activated);
+        Assert.Equal (MouseState.None, view.MouseState);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableFromLeaveHandler_NotifiesEachDepartureOnce (bool pressed)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View first = new () { Frame = new (0, 0, 5, 1) };
+        using View second = new () { Frame = new (0, 0, 5, 1) };
+        app.Mouse.RaiseMouseEnterLeaveEvents (Point.Empty, [first, second]);
+        first.MouseState |= pressed ? MouseState.Pressed : MouseState.None;
+        int firstLeft = 0;
+        int secondLeft = 0;
+        first.MouseLeave += (_, _) =>
+        {
+            firstLeft++;
+            app.Mouse.IsMouseDisabled = true;
+        };
+        second.MouseLeave += (_, _) => secondLeft++;
+
+        app.Mouse.RaiseMouseEnterLeaveEvents (new Point (10, 0), []);
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.Equal (1, firstLeft);
+        Assert.Equal (1, secondLeft);
+        Assert.Empty (app.Mouse.CachedViewsUnderMouse);
+        Assert.Equal (MouseState.None, first.MouseState);
+        Assert.Equal (MouseState.None, second.MouseState);
+    }
+
     [Fact]
     public void RetainedMouse_AfterDispose_DoesNotWriteToTerminal ()
     {
