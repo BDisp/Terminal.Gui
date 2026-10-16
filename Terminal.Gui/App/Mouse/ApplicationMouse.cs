@@ -63,6 +63,13 @@ internal class ApplicationMouse : IMouse, IDisposable
     /// <inheritdoc/>
     public Point? LastMousePosition { get; set; }
 
+    private long _mouseDisableGeneration;
+
+    /// <summary>
+    ///     Identifies the current mouse-disable cycle so holds cannot resume after reporting is re-enabled.
+    /// </summary>
+    internal long MouseDisableGeneration => Interlocked.Read (ref _mouseDisableGeneration);
+
     private volatile bool _isMouseDisabled;
 
     /// <inheritdoc/>
@@ -101,6 +108,9 @@ internal class ApplicationMouse : IMouse, IDisposable
         {
             return;
         }
+
+        // Invalidate every existing hold, including those no longer grabbed or in the hover cache.
+        Interlocked.Increment (ref _mouseDisableGeneration);
 
         // View state belongs to the UI thread; queue the release when called from another thread.
         if (App is ApplicationImpl { Initialized: true, MainThreadId: { } mainThreadId } uiApp
@@ -586,7 +596,8 @@ internal class ApplicationMouse : IMouse, IDisposable
     /// <inheritdoc/>
     public void UngrabMouse ()
     {
-        if (_mouseGrabViewRef is null || !_mouseGrabViewRef.TryGetTarget (out View? grabbedView))
+        WeakReference<View>? grab = _mouseGrabViewRef;
+        if (grab is null || !grab.TryGetTarget (out View? grabbedView))
         {
             return;
         }
@@ -597,6 +608,13 @@ internal class ApplicationMouse : IMouse, IDisposable
         {
             return;
         }
+
+        // A callback can release this grab or replace it, even with a new grab on the same view.
+        if (!ReferenceEquals (_mouseGrabViewRef, grab))
+        {
+            return;
+        }
+
         _mouseGrabViewRef = null;
         RaiseUnGrabbedMouseEvent (grabbedView);
 

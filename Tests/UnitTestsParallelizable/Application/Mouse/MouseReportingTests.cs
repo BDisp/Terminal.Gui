@@ -215,6 +215,55 @@ public class MouseReportingTests
         repeater.Verify (instance => instance.Stop (), Times.Once);
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableDuringUngrab_RaisesCompletionOnce (bool cancel)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View view = new ();
+        app.Mouse.GrabMouse (view);
+        int released = 0;
+        app.Mouse.UnGrabbedMouse += (_, _) => released++;
+        app.Mouse.UnGrabbingMouse += (_, e) =>
+        {
+            app.Mouse.IsMouseDisabled = true;
+            e.Cancel = cancel;
+        };
+
+        app.Mouse.UngrabMouse ();
+
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (1, released);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableAndRegrabDuringUngrab_PreservesReplacementGrab (bool sameView)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View original = new ();
+        using View replacement = new ();
+        View next = sameView ? original : replacement;
+        app.Mouse.GrabMouse (original);
+        int released = 0;
+        app.Mouse.UnGrabbedMouse += (_, _) => released++;
+        app.Mouse.UnGrabbingMouse += (_, _) =>
+        {
+            app.Mouse.IsMouseDisabled = true;
+            app.Mouse.IsMouseDisabled = false;
+            app.Mouse.GrabMouse (next);
+        };
+
+        app.Mouse.UngrabMouse ();
+
+        Assert.True (app.Mouse.IsGrabbed (next));
+        Assert.Equal (1, released);
+    }
+
     [Fact]
     public void Disable_ClearsHoverAndKeepsEventSubscriptions ()
     {
@@ -282,9 +331,11 @@ public class MouseReportingTests
 
     // CoPilot - GPT-6
     [Theory]
-    [InlineData (false)]
-    [InlineData (true)]
-    public void DisableAfterCanceledGrab_StopsRepeater (bool leaveBeforeDisable)
+    [InlineData (false, false)]
+    [InlineData (true, false)]
+    [InlineData (false, true)]
+    [InlineData (true, true)]
+    public void DisableAfterCanceledGrab_StopsRepeater (bool leaveBeforeDisable, bool reenableBeforeTick)
     {
         VirtualTimeProvider time = new ();
         using ApplicationImpl app = Create (new StringBuilder (), timeProvider: time);
@@ -318,13 +369,91 @@ public class MouseReportingTests
         }
 
         app.Mouse.IsMouseDisabled = true;
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonReleased });
+        if (reenableBeforeTick)
+        {
+            app.Mouse.IsMouseDisabled = false;
+        }
+
         time.Advance (interval);
         app.TimedEvents.RunTimers ();
 
         Assert.Equal (1, activated);
         Assert.Empty (app.TimedEvents.Timeouts);
         Assert.Equal (MouseState.None, view.MouseState);
+
+        // A fresh press after re-enabling must start a new hold, not revive the previous one.
+        app.Mouse.IsMouseDisabled = false;
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+        time.Advance (interval);
+        app.TimedEvents.RunTimers ();
+        Assert.Equal (2, activated);
+        app.Mouse.IsMouseDisabled = true;
+        Assert.Empty (app.TimedEvents.Timeouts);
         app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableAndReenableDuringHoldStartup_DoesNotScheduleRepeater (bool afterGrab)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View view = new ();
+        using MouseHoldRepeaterImpl repeater = new (view, app.TimedEvents, app.Mouse);
+        int timeoutsBefore = app.TimedEvents!.Timeouts.Count;
+        if (afterGrab)
+        {
+            app.Mouse.GrabbedMouse += (_, _) => ToggleMouse ();
+        }
+        else
+        {
+            app.Mouse.GrabbingMouse += (_, _) => ToggleMouse ();
+        }
+
+        repeater.Start (new () { View = view, Flags = MouseFlags.LeftButtonPressed });
+
+        Assert.False (app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (MouseState.None, view.MouseState);
+        Assert.Equal (timeoutsBefore, app.TimedEvents.Timeouts.Count);
+
+        void ToggleMouse ()
+        {
+            app.Mouse.IsMouseDisabled = true;
+            app.Mouse.IsMouseDisabled = false;
+        }
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void NewPressBeforeInvalidatedHoldTicks_StartsFreshHold ()
+    {
+        VirtualTimeProvider time = new ();
+        using ApplicationImpl app = Create (new StringBuilder (), timeProvider: time);
+        using View view = new ();
+        TimeSpan interval = TimeSpan.FromMilliseconds (100);
+        using MouseHoldRepeaterImpl repeater = new (view, app.TimedEvents, app.Mouse)
+        {
+            Timeout = new () { Span = interval, Callback = null! }
+        };
+        app.Mouse.GrabbingMouse += (_, e) => e.Cancel = true;
+        List<Point?> positions = [];
+        repeater.MouseIsHeldDownTick += (_, e) => positions.Add (e.CurrentValue.Position);
+        repeater.Start (new () { View = view, Position = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+        app.Mouse.IsMouseDisabled = true;
+        app.Mouse.IsMouseDisabled = false;
+        Point nextPosition = new (1, 0);
+
+        repeater.Start (new () { View = view, Position = nextPosition, Flags = MouseFlags.LeftButtonPressed });
+        time.Advance (interval);
+        app.TimedEvents!.RunTimers ();
+
+        Assert.Equal ([nextPosition], positions);
+        Assert.Single (app.TimedEvents.Timeouts);
+        repeater.Stop ();
+        Assert.Empty (app.TimedEvents.Timeouts);
     }
 
     // CoPilot - GPT-6
