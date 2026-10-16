@@ -925,7 +925,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                             Thread.Sleep (50);
                             TimeSpan elapsed = DateTime.Now - now;
                             Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
-                        }); // continuation posts to the toolkit
+                        }, TestContext.Current.CancellationToken); // continuation posts to the toolkit
 
         Assert.True (mouseEventHandled);
 
@@ -941,7 +941,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                             Thread.Sleep (50);
                             TimeSpan elapsed = DateTime.Now - now;
                             Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
-                        }); // continuation posts to the toolkit
+                        }, TestContext.Current.CancellationToken); // continuation posts to the toolkit
 
         Assert.True (bottonClicked);
 
@@ -953,7 +953,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                             Thread.Sleep (50);
                             TimeSpan elapsed = DateTime.Now - now;
                             Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
-                        }); // continuation posts to the toolkit
+                        }, TestContext.Current.CancellationToken); // continuation posts to the toolkit
 
         Assert.Equal ("Action Lambda executed", actionLambdaMessage);
 
@@ -965,7 +965,7 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                             Thread.Sleep (50);
                             TimeSpan elapsed = DateTime.Now - now;
                             Assert.True (elapsed.TotalMilliseconds >= 50, $"Elapsed time was {elapsed.TotalMilliseconds} ms, expected at least 50 ms.");
-                        }); // continuation posts to the toolkit
+                        }, TestContext.Current.CancellationToken); // continuation posts to the toolkit
 
         Assert.Equal ("Action Method executed", actionMethodMessage);
 
