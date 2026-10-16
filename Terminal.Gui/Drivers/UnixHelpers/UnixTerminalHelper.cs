@@ -164,6 +164,7 @@ internal static class UnixTerminalHelper
             {
                 output.Write (EscSeqUtils.CSI_EnableMouseEvents);
             }
+
             output.Write (EscSeqUtils.CSI_EnableBracketedPaste);
         }
     }

@@ -5,6 +5,14 @@ namespace DriverTests.AnsiDriver;
 // CoPilot - GPT-6
 public class AnsiMouseReportingTests
 {
+    private static AnsiOutput.UnixWriter Capture (StringBuilder bytes) =>
+        chunk =>
+        {
+            bytes.Append (Encoding.UTF8.GetString (chunk));
+
+            return true;
+        };
+
     [Theory]
     [InlineData (AppModel.Inline, false)]
     [InlineData (AppModel.Inline, true)]
@@ -13,7 +21,7 @@ public class AnsiMouseReportingTests
     public void Startup_HonorsMouseSettingWithoutEnablingAnOptedOutTerminal (AppModel model, bool disabled)
     {
         StringBuilder bytes = new ();
-        using AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, model, disabled, initializeTerminal: true);
+        using AnsiOutput output = new (Capture (bytes), model, disabled, initializeTerminal: true);
 
         string startup = bytes.ToString ();
         Assert.Contains (disabled ? EscSeqUtils.CSI_DisableMouseEvents : EscSeqUtils.CSI_EnableMouseEvents, startup);
@@ -26,7 +34,7 @@ public class AnsiMouseReportingTests
     public void Resume_RestoresDisabledReporting ()
     {
         StringBuilder bytes = new ();
-        using AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline, isMouseDisabled: true);
+        using AnsiOutput output = new (Capture (bytes), AppModel.Inline, isMouseDisabled: true);
 
         output.RestoreMouseReporting ();
 
@@ -39,7 +47,7 @@ public class AnsiMouseReportingTests
     public void Dispose_DisablesReportingAndRestoresCursor (bool disabled)
     {
         StringBuilder bytes = new ();
-        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline, disabled);
+        AnsiOutput output = new (Capture (bytes), AppModel.Inline, disabled);
 
         output.Dispose ();
 

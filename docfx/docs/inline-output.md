@@ -48,7 +48,9 @@ app.Init (DriverRegistry.Names.ANSI);
 ```
 
 The built-in ANSI driver honors this setting at startup and during a session, in both
-inline and fullscreen modes. Mouse reporting remains enabled by default. To change the
+inline and fullscreen modes. Mouse reporting remains enabled by default. To disable it for
+every application, set `"Application": { "IsMouseDisabled": true }` in configuration and apply it
+with `TuiConfigurationBuilder.ApplyToStaticFacades ()` before calling `Application.Create ()`. To change the
 setting while running, use the UI thread or `app.Invoke(...)`. Disabling releases an
 active mouse grab, stops hold repetition, and clears hover state. Keyboard editing,
 bracketed paste, and `PrintAboveAsync` continue to work. Other drivers suppress application

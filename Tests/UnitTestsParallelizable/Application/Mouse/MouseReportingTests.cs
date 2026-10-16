@@ -10,7 +10,13 @@ public class MouseReportingTests
 {
     private static ApplicationImpl Create (StringBuilder bytes, bool disabled = false, AppModel model = AppModel.Inline)
     {
-        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, model);
+        AnsiOutput output = new (chunk =>
+                                 {
+                                     bytes.Append (Encoding.UTF8.GetString (chunk));
+
+                                     return true;
+                                 },
+                                 model);
         output.SetSize (80, 12);
         AnsiComponentFactory factory = new (output: output);
         ApplicationImpl app = new (factory) { AppModel = model, ForceInlinePosition = Point.Empty };
@@ -86,6 +92,7 @@ public class MouseReportingTests
                 insertionStarted.Set ();
                 Assert.True (releaseInsertion.Wait (TimeSpan.FromSeconds (5), cancellationToken));
             }
+
             return true;
         }, AppModel.Inline);
         output.SetSize (80, 12);
@@ -240,5 +247,117 @@ public class MouseReportingTests
         mouse.IsMouseDisabled = false;
 
         Assert.Empty (bytes.ToString ());
+    }
+
+    // Copilot - Claude Opus 5.5
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableFromPressHandler_StopsDispatchBeforeSuperViewCanGrab (bool superViewAutoGrabs)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View superView = new () { Width = 20, Height = 5, MouseHighlightStates = superViewAutoGrabs ? MouseState.Pressed : MouseState.None };
+        View subView = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed };
+        subView.MouseBindings.ReplaceCommands (MouseFlags.LeftButtonPressed, Command.Activate);
+        subView.Activating += (_, _) => app.Mouse.IsMouseDisabled = true;
+        superView.Add (subView);
+        top.Add (superView);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = new (1, 0), Flags = MouseFlags.LeftButtonPressed });
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (MouseState.None, superView.MouseState);
+        Assert.Equal (MouseState.None, subView.MouseState);
+        app.End (token);
+    }
+
+    // Copilot - Claude Opus 5.5
+    [Fact]
+    public void DisableFromEnterHandler_DoesNotRepopulateHover ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View first = new () { Frame = new (0, 0, 5, 1) };
+        using View second = new () { Frame = new (0, 0, 5, 1) };
+        first.MouseEnter += (_, _) => app.Mouse.IsMouseDisabled = true;
+
+        app.Mouse.RaiseMouseEnterLeaveEvents (Point.Empty, [first, second]);
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.DoesNotContain (second, app.Mouse.CachedViewsUnderMouse);
+    }
+
+    // Copilot - Claude Opus 5.5
+    [Fact]
+    public void GrabMouse_WhileDisabled_IsIgnored ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), true);
+        using View view = new ();
+        bool grabbing = false;
+        app.Mouse.GrabbingMouse += (_, _) => grabbing = true;
+
+        app.Mouse.GrabMouse (view);
+
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.False (grabbing);
+    }
+
+    // Copilot - Claude Opus 5.5
+    [Fact]
+    public void DisableFromOtherThread_WritesTerminalNowAndQueuesViewRelease ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes);
+        using View view = new () { MouseState = MouseState.Pressed };
+        app.Mouse.GrabMouse (view);
+        bytes.Clear ();
+        int? mainThreadId = app.MainThreadId;
+        app.MainThreadId = Environment.CurrentManagedThreadId + 1;
+
+        try
+        {
+            app.Mouse.IsMouseDisabled = true;
+        }
+        finally
+        {
+            app.MainThreadId = mainThreadId;
+        }
+
+        Assert.Equal (EscSeqUtils.CSI_DisableMouseEvents, bytes.ToString ());
+        Assert.True (app.Mouse.IsGrabbed (view));
+
+        app.TimedEvents!.RunTimers ();
+
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (MouseState.None, view.MouseState);
+    }
+
+    // Copilot - Claude Opus 5.5
+    [Fact]
+    public void QueuedViewRelease_IsSkippedIfReenabledFirst ()
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using View view = new () { MouseState = MouseState.Pressed };
+        app.Mouse.GrabMouse (view);
+        int? mainThreadId = app.MainThreadId;
+        app.MainThreadId = Environment.CurrentManagedThreadId + 1;
+
+        try
+        {
+            app.Mouse.IsMouseDisabled = true;
+        }
+        finally
+        {
+            app.MainThreadId = mainThreadId;
+        }
+
+        app.Mouse.IsMouseDisabled = false;
+        app.TimedEvents!.RunTimers ();
+
+        Assert.True (app.Mouse.IsGrabbed (view));
+        Assert.Equal (MouseState.Pressed, view.MouseState);
     }
 }

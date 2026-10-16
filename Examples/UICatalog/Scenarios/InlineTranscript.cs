@@ -19,7 +19,7 @@ public sealed class InlineTranscript : Scenario
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         Label title = new () { Text = "Inline transcript · Enter sends · F2 mouse · Esc exits", Width = Dim.Fill () };
         TextField input = new () { Y = 1, Width = Dim.Fill () };
-        Label status = new () { Y = 2, Text = "Mouse off: select/copy terminal text. F2 enables UI mouse.", Width = Dim.Fill () };
+        Label status = new () { Y = 2, Text = "Mouse off: native select/copy. F2: UI mouse.", Width = Dim.Fill () };
         composer.Add (title, input, status);
         composer.KeyDown += (_, key) =>
         {
@@ -30,8 +30,8 @@ public sealed class InlineTranscript : Scenario
 
             app.Mouse.IsMouseDisabled = !app.Mouse.IsMouseDisabled;
             status.Text = app.Mouse.IsMouseDisabled
-                              ? "Mouse off: select/copy terminal text. F2 enables UI mouse."
-                              : "Mouse on: interact with the composer. F2 restores terminal selection.";
+                              ? "Mouse off: native select/copy. F2: UI mouse."
+                              : "Mouse on: UI handles mouse. F2: native select.";
             key.Handled = true;
         };
 
