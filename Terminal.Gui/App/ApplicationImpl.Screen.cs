@@ -277,13 +277,15 @@ internal partial class ApplicationImpl
                 return;
             }
 
-            // Match shrink's frame-bottom measurement: offsets and every visible active runnable need rows.
+            // Reserve every visible active runnable's frame bottom, but at least its height: bottom-anchored
+            // views can extend above the current reservation while waiting for it to grow.
             // Cap the reservation at the terminal height — the inline region can never exceed it.
             int viewHeight = 0;
             foreach (View runnable in SessionStack.Select (token => token.Runnable).OfType<View> ().Where (view => view.Visible))
             {
                 long bottom = (long)runnable.Frame.Y + runnable.Frame.Height;
-                viewHeight = Math.Max (viewHeight, (int)Math.Clamp (bottom, 0, Driver.Screen.Height));
+                long requiredHeight = Math.Max (runnable.Frame.Height, bottom);
+                viewHeight = Math.Max (viewHeight, (int)Math.Clamp (requiredHeight, 0, Driver.Screen.Height));
             }
 
             if (viewHeight > Screen.Height)

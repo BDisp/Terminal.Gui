@@ -238,6 +238,42 @@ public class InlineShrinkTests
         app.End (outerOwner);
     }
 
+    [Theory]
+    [InlineData (false, 6, 6)]
+    [InlineData (true, 6, 6)]
+    [InlineData (false, 20, 12)]
+    [InlineData (true, 20, 12)]
+    public void BottomAnchoredRunnable_CanRegrowAfterShrink (bool nested, int height, int expectedHeight)
+    {
+        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using Runnable outer = new () { Width = Dim.Fill (), Height = 8 };
+        SessionToken outerOwner = app.Begin (outer)!;
+        app.LayoutAndDraw ();
+        outer.Height = 2;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 2 };
+        SessionToken? modalOwner = nested ? app.Begin (modal) : null;
+        Runnable anchored = nested ? modal : outer;
+        anchored.Y = Pos.AnchorEnd ();
+        app.LayoutAndDraw ();
+        anchored.Height = height;
+
+        app.LayoutAndDraw ();
+
+        Assert.Equal (expectedHeight, app.Screen.Height);
+        Assert.Equal (expectedHeight, app.Driver!.Rows);
+        Assert.Equal (expectedHeight - height, anchored.Frame.Y);
+        app.LayoutAndDraw ();
+        Assert.Equal (expectedHeight, app.Screen.Height);
+        if (modalOwner is { })
+        {
+            app.End (modalOwner);
+        }
+        app.End (outerOwner);
+    }
+
     [Fact]
     public void ContentHeightFunction_CanShrinkAfterLayoutInvalidation ()
     {

@@ -189,6 +189,35 @@ public class InlineOutputTerminalTests
         app.End (outerOwner);
     }
 
+    // CoPilot - GPT-6
+    [Fact]
+    public void BottomAnchoredRegrowthAfterShrink_RendersEntireFrame ()
+    {
+        Grid terminal = new (20, 8);
+        terminal.Rows [0] = "SHELL ZERO".PadRight (20).ToCharArray ();
+        terminal.Rows [1] = "SHELL ONE".PadRight (20).ToCharArray ();
+        AnsiOutput output = new (chunk => { terminal.Feed (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (20, 8);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output)) { AppModel = AppModel.Inline, ForceInlinePosition = new Point (0, 2) };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        composer.Height = 2;
+        app.LayoutAndDraw ();
+        Assert.Equal (2, app.Screen.Height);
+
+        composer.Y = Pos.AnchorEnd ();
+        composer.Height = 6;
+        composer.Text = "R0\nR1\nR2\nR3\nR4\nR5";
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, 2, 20, 6), app.Screen);
+        Assert.Empty (terminal.History);
+        Assert.Equal (["SHELL ZERO", "SHELL ONE", .. Enumerable.Range (0, 6).Select (index => $"R{index}")], terminal.Rows.Select (row => new string (row).TrimEnd ()));
+        app.End (owner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {
