@@ -2,6 +2,10 @@ namespace Terminal.Gui.App;
 
 internal partial class ApplicationImpl
 {
+    // Growth and shrink must use the same floor, including when a runnable extends above row zero.
+    private static long GetRequiredInlineHeight (View runnable) =>
+        Math.Max (runnable.Frame.Height, (long)runnable.Frame.Y + runnable.Frame.Height);
+
     private bool TryShrinkInlineRegion ()
     {
         if (!_inlineScreenSized || _screen is not { Height: > 0 } region
@@ -36,13 +40,13 @@ internal partial class ApplicationImpl
                 return false;
             }
 
-            long bottom = (long)runnable.Frame.Y + runnable.Frame.Height;
-            if (bottom >= region.Height)
+            long requiredHeight = GetRequiredInlineHeight (runnable);
+            if (requiredHeight >= region.Height)
             {
                 return false;
             }
 
-            height = Math.Max (height, (int)Math.Max (0, bottom));
+            height = Math.Max (height, (int)Math.Max (0, requiredHeight));
         }
 
         // Erase the old owned rows before releasing any of them. Otherwise a later insertion can scroll a stale

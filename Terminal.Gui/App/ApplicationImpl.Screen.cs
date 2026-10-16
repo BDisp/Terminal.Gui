@@ -283,8 +283,7 @@ internal partial class ApplicationImpl
             int viewHeight = 0;
             foreach (View runnable in SessionStack.Select (token => token.Runnable).OfType<View> ().Where (view => view.Visible))
             {
-                long bottom = (long)runnable.Frame.Y + runnable.Frame.Height;
-                long requiredHeight = Math.Max (runnable.Frame.Height, bottom);
+                long requiredHeight = GetRequiredInlineHeight (runnable);
                 viewHeight = Math.Max (viewHeight, (int)Math.Clamp (requiredHeight, 0, Driver.Screen.Height));
             }
 

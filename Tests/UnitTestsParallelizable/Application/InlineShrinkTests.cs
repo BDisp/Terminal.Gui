@@ -211,6 +211,54 @@ public class InlineShrinkTests
         app.End (outerOwner);
     }
 
+    [Theory]
+    [InlineData (false, -1)]
+    [InlineData (true, -1)]
+    [InlineData (false, -8)]
+    [InlineData (true, -8)]
+    public void NegativeY_ShrinksToMinimumHeightAndStaysStable (bool nested, int y)
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _);
+        using Runnable outer = new () { Width = Dim.Fill (), Height = 8 };
+        SessionToken outerOwner = app.Begin (outer)!;
+        app.LayoutAndDraw ();
+        using Runnable modal = new () { Width = Dim.Fill (), Height = 6 };
+        SessionToken? modalOwner = nested ? app.Begin (modal) : null;
+        Runnable negative = nested ? modal : outer;
+        outer.Height = nested ? 2 : 6;
+        negative.Y = y;
+        app.LayoutAndDraw ();
+        bytes.Clear ();
+        int changes = 0;
+        EventHandler<EventArgs<Rectangle>> changed = (_, _) => changes++;
+        app.ScreenChanged += changed;
+
+        try
+        {
+            for (int pass = 0; pass < 5; pass++)
+            {
+                app.LayoutAndDraw ();
+            }
+        }
+        finally
+        {
+            app.ScreenChanged -= changed;
+        }
+
+        Assert.Equal (0, changes);
+        Assert.Equal (new Rectangle (0, 2, 20, 6), app.Screen);
+        Assert.Equal (6, app.Driver!.Rows);
+        Assert.Equal (new Point (0, 2), app.Driver.InlinePosition);
+        Assert.DoesNotContain ("[2K", bytes.ToString ());
+        Assert.DoesNotContain ('\n', bytes.ToString ());
+        if (modalOwner is { })
+        {
+            app.End (modalOwner);
+        }
+        app.End (outerOwner);
+    }
+
     [Fact]
     public void HiddenModal_DoesNotGrowReservationUntilVisible ()
     {
