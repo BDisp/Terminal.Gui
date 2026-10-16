@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text;
 using Moq;
 
@@ -282,12 +283,183 @@ public class MouseReportingTests
         using ApplicationImpl app = Create (new StringBuilder ());
         using View first = new () { Frame = new (0, 0, 5, 1) };
         using View second = new () { Frame = new (0, 0, 5, 1) };
+        int left = 0;
         first.MouseEnter += (_, _) => app.Mouse.IsMouseDisabled = true;
+        first.MouseLeave += (_, _) => left++;
 
         app.Mouse.RaiseMouseEnterLeaveEvents (Point.Empty, [first, second]);
 
         Assert.True (app.Mouse.IsMouseDisabled);
-        Assert.DoesNotContain (second, app.Mouse.CachedViewsUnderMouse);
+        Assert.Empty (app.Mouse.CachedViewsUnderMouse);
+        Assert.Equal (MouseState.None, first.MouseState);
+        Assert.Equal (MouseState.None, second.MouseState);
+        Assert.Equal (1, left);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false, false, false)]
+    [InlineData (true, false, false)]
+    [InlineData (false, true, false)]
+    [InlineData (true, true, false)]
+    [InlineData (false, true, true)]
+    [InlineData (true, true, true)]
+    public void DisableFromGrabCallback_DoesNotInstallGrabOrContinuePress (bool afterGrab, bool autoGrab, bool repeat)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed };
+        view.MouseHoldRepeat = repeat ? MouseFlags.LeftButtonPressed : null;
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        int timeoutsBefore = app.TimedEvents!.Timeouts.Count;
+        int activated = 0;
+        view.MouseBindings.ReplaceCommands (MouseFlags.LeftButtonPressed, Command.Activate);
+        view.Activating += (_, _) => activated++;
+        if (afterGrab)
+        {
+            app.Mouse.GrabbedMouse += (_, _) => app.Mouse.IsMouseDisabled = true;
+        }
+        else
+        {
+            app.Mouse.GrabbingMouse += (_, _) => app.Mouse.IsMouseDisabled = true;
+        }
+
+        if (autoGrab)
+        {
+            app.Mouse.RaiseMouseEvent (new () { ScreenPosition = new (1, 0), Flags = MouseFlags.LeftButtonPressed });
+        }
+        else
+        {
+            app.Mouse.GrabMouse (view);
+        }
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (MouseState.None, view.MouseState);
+        Assert.Equal (0, activated);
+        Assert.Equal (timeoutsBefore, app.TimedEvents.Timeouts.Count);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void DisableFromLowLevelMouseEvent_StopsPressStateAndCommands (bool autoGrab)
+    {
+        using ApplicationImpl app = Create (new StringBuilder ());
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = autoGrab ? MouseState.Pressed : MouseState.None };
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        int activated = 0;
+        view.MouseBindings.ReplaceCommands (MouseFlags.LeftButtonPressed, Command.Activate);
+        view.Activating += (_, _) => activated++;
+        view.MouseEvent += (_, _) => app.Mouse.IsMouseDisabled = true;
+
+        app.Mouse.RaiseMouseEvent (new () { ScreenPosition = new (1, 0), Flags = MouseFlags.LeftButtonPressed });
+
+        Assert.True (app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsGrabbed ());
+        Assert.Equal (MouseState.None, view.MouseState);
+        Assert.Equal (0, activated);
+        app.End (token);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (AppModel.Inline)]
+    [InlineData (AppModel.FullScreen)]
+    public void ConcurrentToggle_KeepsTerminalTransitionAndPublicationUnderRenderGate (AppModel model)
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using ApplicationImpl app = Create (new StringBuilder (), model: model);
+        AnsiOutput output = Assert.IsType<AnsiOutput> (Assert.IsType<DriverImpl> (app.Driver).GetOutput ());
+        IMainLoopCoordinator original = app.Coordinator!;
+        IInlineRenderCoordinator renderGate = Assert.IsAssignableFrom<IInlineRenderCoordinator> (original);
+        IMouseReportingCoordinator reporting = Assert.IsAssignableFrom<IMouseReportingCoordinator> (original);
+        using ManualResetEventSlim transitionFinished = new ();
+        using ManualResetEventSlim releasePublication = new ();
+        using ManualResetEventSlim uiStarted = new ();
+        using ManualResetEventSlim uiFinished = new ();
+        int workerId = 0;
+        Mock<IMainLoopCoordinator> proxy = new ();
+        proxy.As<IInlineRenderCoordinator> ().Setup (instance => instance.WithRenderGate (It.IsAny<Action> ()))
+             .Callback<Action> (renderGate.WithRenderGate);
+        proxy.As<IMouseReportingCoordinator> ().Setup (instance => instance.SetMouseDisabled (It.IsAny<bool> ()))
+             .Callback<bool> (disabled =>
+             {
+                 reporting.SetMouseDisabled (disabled);
+                 if (Environment.CurrentManagedThreadId != workerId)
+                 {
+                     return;
+                 }
+                 transitionFinished.Set ();
+                 Assert.True (releasePublication.Wait (TimeSpan.FromSeconds (5), cancellationToken));
+             });
+        Exception? workerFailure = null;
+        Exception? uiFailure = null;
+        Thread worker = new (() =>
+        {
+            try
+            {
+                workerId = Environment.CurrentManagedThreadId;
+                app.Mouse.IsMouseDisabled = true;
+            }
+            catch (Exception error) { workerFailure = error; }
+        })
+        { IsBackground = true };
+        Thread ui = new (() =>
+        {
+            try
+            {
+                uiStarted.Set ();
+                app.Mouse.IsMouseDisabled = true;
+                app.Mouse.IsMouseDisabled = false;
+            }
+            catch (Exception error) { uiFailure = error; }
+            finally { uiFinished.Set (); }
+        })
+        { IsBackground = true };
+        bool finishedBeforePublication = false;
+        SetCoordinator (proxy.Object);
+        try
+        {
+            worker.Start ();
+            Assert.True (transitionFinished.Wait (TimeSpan.FromSeconds (5), cancellationToken));
+            ui.Start ();
+            Assert.True (uiStarted.Wait (TimeSpan.FromSeconds (5), cancellationToken));
+            finishedBeforePublication = uiFinished.Wait (TimeSpan.FromMilliseconds (100), cancellationToken);
+        }
+        finally
+        {
+            releasePublication.Set ();
+            try
+            {
+                Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
+                if ((ui.ThreadState & ThreadState.Unstarted) == 0)
+                {
+                    Assert.True (ui.Join (TimeSpan.FromSeconds (5)));
+                }
+            }
+            finally
+            {
+                SetCoordinator (original);
+            }
+        }
+
+        Assert.Null (workerFailure);
+        Assert.Null (uiFailure);
+        Assert.False (finishedBeforePublication);
+        Assert.Equal (output.IsMouseDisabled, app.Mouse.IsMouseDisabled);
+        Assert.False (app.Mouse.IsMouseDisabled);
+
+        // Decorate the real coordinator to pause exactly between its physical transition and the setter's publication.
+        void SetCoordinator (IMainLoopCoordinator coordinator) => typeof (ApplicationImpl)
+            .GetProperty (nameof (ApplicationImpl.Coordinator), BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue (app, coordinator);
     }
 
     // Copilot - Claude Opus 5.5

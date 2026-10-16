@@ -71,34 +71,46 @@ internal class ApplicationMouse : IMouse, IDisposable
         get => _isMouseDisabled;
         set
         {
-            if (_isMouseDisabled == value)
+            // Use the render gate for the entire transition, not just the physical mode write. A separate mouse
+            // lock would invert the lock order when rendering invokes a mouse callback that changes this property.
+            if (App is ApplicationImpl { Initialized: true, Coordinator: IInlineRenderCoordinator coordinator })
             {
+                coordinator.WithRenderGate (() => SetMouseDisabled (value));
                 return;
             }
 
-            if (App is ApplicationImpl { Initialized: true } app)
-            {
-                (app.Coordinator as IMouseReportingCoordinator)?.SetMouseDisabled (value);
-            }
-
-            _isMouseDisabled = value;
-
-            if (!value)
-            {
-                return;
-            }
-
-            // View state belongs to the UI thread; queue the release when called from another thread.
-            if (App is ApplicationImpl { Initialized: true, MainThreadId: { } mainThreadId } uiApp
-                && mainThreadId != Environment.CurrentManagedThreadId)
-            {
-                uiApp.Invoke (ReleaseMouseState);
-
-                return;
-            }
-
-            ReleaseMouseState ();
+            SetMouseDisabled (value);
         }
+    }
+
+    private void SetMouseDisabled (bool value)
+    {
+        if (_isMouseDisabled == value)
+        {
+            return;
+        }
+
+        if (App is ApplicationImpl { Initialized: true } app)
+        {
+            (app.Coordinator as IMouseReportingCoordinator)?.SetMouseDisabled (value);
+        }
+
+        _isMouseDisabled = value;
+
+        if (!value)
+        {
+            return;
+        }
+
+        // View state belongs to the UI thread; queue the release when called from another thread.
+        if (App is ApplicationImpl { Initialized: true, MainThreadId: { } mainThreadId } uiApp
+            && mainThreadId != Environment.CurrentManagedThreadId)
+        {
+            uiApp.Invoke (ReleaseMouseState);
+            return;
+        }
+
+        ReleaseMouseState ();
     }
 
     /// <inheritdoc/>
@@ -160,7 +172,7 @@ internal class ApplicationMouse : IMouse, IDisposable
             Trace.Mouse ("app", mouseEvent.Flags, mouseEvent.ScreenPosition, "Entry", "Invoking MouseEvent");
             MouseEvent?.Invoke (this, mouseEvent);
 
-            if (mouseEvent.Handled)
+            if (mouseEvent.Handled || IsMouseDisabled)
             {
                 return;
             }
@@ -401,6 +413,13 @@ internal class ApplicationMouse : IMouse, IDisposable
             var eventArgs = new CancelEventArgs ();
             bool? cancelled = view.NewMouseEnterEvent (eventArgs);
 
+            if (IsMouseDisabled)
+            {
+                // Disable already cleared the cache and raised MouseLeave, but the enter callback resumed afterward.
+                view.MouseState = MouseState.None;
+                break;
+            }
+
             if (cancelled is true || eventArgs.Cancel)
             {
                 break;
@@ -534,7 +553,17 @@ internal class ApplicationMouse : IMouse, IDisposable
             return;
         }
 
+        if (IsMouseDisabled)
+        {
+            return;
+        }
+
         RaiseGrabbedMouseEvent (view);
+
+        if (IsMouseDisabled)
+        {
+            return;
+        }
 
         // _mouseGrabViewRef is only set if the application is initialized.
         _mouseGrabViewRef = new WeakReference<View> (view);

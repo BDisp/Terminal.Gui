@@ -481,6 +481,11 @@ public partial class View // Mouse APIs
     /// <seealso cref="MouseHighlightStates"/>
     public bool? NewMouseEvent (Mouse mouse)
     {
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
+        }
+
         // 1. Pre-conditions
         mouse.Position ??= mouse.ScreenPosition;
 
@@ -527,8 +532,15 @@ public partial class View // Mouse APIs
             }
         }
 
+        // Starting hold repetition can invoke grab callbacks that disable the mouse.
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
+        }
+
         // 4. Low-level MouseEvent (cancellable)
-        if (RaiseMouseEvent (mouse) || mouse.Handled)
+        bool handled = RaiseMouseEvent (mouse);
+        if (StopMouseProcessingIfDisabled () || handled || mouse.Handled)
         {
             Trace.Mouse (this, mouse, "Exit", $"{true}");
 
@@ -608,6 +620,18 @@ public partial class View // Mouse APIs
         Trace.Mouse (this, mouse, "Exit", $"{result}");
 
         return result;
+    }
+
+    private bool StopMouseProcessingIfDisabled ()
+    {
+        if (App?.Mouse.IsMouseDisabled is not true)
+        {
+            return false;
+        }
+
+        MouseHoldRepeater?.Stop ();
+        MouseState = MouseState.None;
+        return true;
     }
 
     /// <summary>
@@ -732,6 +756,11 @@ public partial class View // Mouse APIs
         {
             App?.Mouse.GrabMouse (this);
 
+            if (StopMouseProcessingIfDisabled ())
+            {
+                return true;
+            }
+
             if (!HasFocus)
             {
                 if (CanFocus)
@@ -744,6 +773,12 @@ public partial class View // Mouse APIs
                     superView.SetFocus ();
                 }
             }
+        }
+
+        // Focus callbacks can also disable the mouse after a successful grab.
+        if (StopMouseProcessingIfDisabled ())
+        {
+            return true;
         }
 
         // Update MouseState based on position
