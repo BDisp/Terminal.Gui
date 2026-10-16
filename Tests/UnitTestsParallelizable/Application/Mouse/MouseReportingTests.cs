@@ -9,7 +9,7 @@ namespace ApplicationTests.MouseTests;
 [Collection ("Application Tests")]
 public class MouseReportingTests
 {
-    private static ApplicationImpl Create (StringBuilder bytes, bool disabled = false, AppModel model = AppModel.Inline)
+    private static ApplicationImpl Create (StringBuilder bytes, bool disabled = false, AppModel model = AppModel.Inline, ITimeProvider? timeProvider = null)
     {
         AnsiOutput output = new (chunk =>
                                  {
@@ -20,7 +20,7 @@ public class MouseReportingTests
                                  model);
         output.SetSize (80, 12);
         AnsiComponentFactory factory = new (output: output);
-        ApplicationImpl app = new (factory) { AppModel = model, ForceInlinePosition = Point.Empty };
+        ApplicationImpl app = new (factory, timeProvider ?? new SystemTimeProvider ()) { AppModel = model, ForceInlinePosition = Point.Empty };
         app.Mouse.IsMouseDisabled = disabled;
         app.Init ();
         Assert.Equal (disabled, factory.IsMouseDisabled);
@@ -233,6 +233,51 @@ public class MouseReportingTests
         app.Mouse.IsMouseDisabled = false;
         app.InjectMouse (new Mouse { Flags = MouseFlags.PositionReport, ScreenPosition = Point.Empty });
         Assert.True (mouseReceived);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void DisableAndReenableDuringHold_DoesNotDuplicateTickCommands ()
+    {
+        VirtualTimeProvider time = new ();
+        using ApplicationImpl app = Create (new StringBuilder (), timeProvider: time);
+        using Runnable top = new () { Width = Dim.Fill (), Height = 10 };
+        View view = new () { Width = 5, Height = 1, CanFocus = true, MouseHighlightStates = MouseState.Pressed, MouseHoldRepeat = MouseFlags.LeftButtonReleased };
+        top.Add (view);
+        SessionToken token = app.Begin (top)!;
+        app.LayoutAndDraw ();
+        TimeSpan interval = TimeSpan.FromMilliseconds (100);
+        view.MouseHoldRepeater = new MouseHoldRepeaterImpl (view, app.TimedEvents, app.Mouse)
+        {
+            Timeout = new () { Span = interval, Callback = null! }
+        };
+        int activated = 0;
+        view.Activating += (_, e) =>
+        {
+            activated++;
+            e.Handled = true;
+        };
+
+        for (int cycle = 1; cycle <= 3; cycle++)
+        {
+            app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonPressed });
+            Assert.True (app.Mouse.IsGrabbed (view));
+            time.Advance (interval);
+            app.TimedEvents!.RunTimers ();
+            Assert.Equal (cycle, activated);
+
+            app.Mouse.IsMouseDisabled = true;
+            Assert.False (app.Mouse.IsGrabbed ());
+            Assert.Equal (MouseState.None, view.MouseState);
+            Assert.Empty (app.TimedEvents.Timeouts);
+            app.Mouse.RaiseMouseEvent (new () { ScreenPosition = Point.Empty, Flags = MouseFlags.LeftButtonReleased });
+            time.Advance (interval);
+            app.TimedEvents.RunTimers ();
+            Assert.Equal (cycle, activated);
+            app.Mouse.IsMouseDisabled = false;
+        }
+
+        app.End (token);
     }
 
     [Fact]

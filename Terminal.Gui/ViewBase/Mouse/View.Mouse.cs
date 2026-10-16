@@ -522,6 +522,8 @@ public partial class View // Mouse APIs
         {
             if (mouse.IsPressed)
             {
+                // Disabling may stop repetition without delivering the release that normally detaches this handler.
+                MouseHoldRepeater.MouseIsHeldDownTick -= MouseHoldRepeaterOnMouseIsHeldDownTick;
                 MouseHoldRepeater.MouseIsHeldDownTick += MouseHoldRepeaterOnMouseIsHeldDownTick;
                 MouseHoldRepeater.Start (mouse);
             }
