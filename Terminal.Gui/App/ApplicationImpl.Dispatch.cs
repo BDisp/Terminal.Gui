@@ -168,6 +168,9 @@ internal partial class ApplicationImpl
             // Non-top ended tokens remain in SessionStack until the sessions above them end.
             HasEndedSession = true;
 
+            // While another session still runs, only that owner's queued work remains session-owned.
+            // Once the last session ends, teardown owns every remaining posted callback and releases it to the
+            // thread pool instead of treating it as UI-thread work.
             if (HasRunningSession)
             {
                 pending = _queuedDispatches.Where (operation => ReferenceEquals (operation.Owner, owner)).ToArray ();

@@ -804,6 +804,76 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Copilot - GPT-5.4 mini
+    [Fact]
+    public void Send_RacingWithEnd_ExecutesAtMostOnce_AndCompletesAfterShutdown ()
+    {
+        for (int iteration = 0; iteration < 25; iteration++)
+        {
+            IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+            Runnable runnable = new ();
+            SessionToken owner = app.Begin (runnable)!;
+            SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+            ManualResetEventSlim senderStarted = new (false);
+            int runs = 0;
+            int? callbackThreadId = null;
+            Exception? senderError = null;
+            Exception? endError = null;
+
+            try
+            {
+                Thread sender = new (() =>
+                                     {
+                                         try
+                                         {
+                                             senderStarted.Set ();
+                                             context.Send (_ =>
+                                                           {
+                                                               callbackThreadId = Thread.CurrentThread.ManagedThreadId;
+                                                               Interlocked.Increment (ref runs);
+                                                           },
+                                                           null);
+                                         }
+                                         catch (Exception ex)
+                                         {
+                                             senderError = ex;
+                                         }
+                                     })
+                                { IsBackground = true };
+                Thread ender = new (() =>
+                                    {
+                                        try
+                                        {
+                                            Assert.True (senderStarted.Wait (TimeSpan.FromSeconds (5)));
+                                            Assert.True (SpinWait.SpinUntil (() => ((ApplicationImpl)app).QueuedPostCount > 0, TimeSpan.FromSeconds (5)));
+                                            app.End (owner);
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            endError = ex;
+                                        }
+                                    })
+                               { IsBackground = true };
+
+                sender.Start ();
+                ender.Start ();
+
+                Assert.True (sender.Join (TimeSpan.FromSeconds (10)), $"Sender did not complete for iteration {iteration}.");
+                Assert.True (ender.Join (TimeSpan.FromSeconds (10)), $"End did not complete for iteration {iteration}.");
+                Assert.Null (senderError);
+                Assert.Null (endError);
+                Assert.Equal (1, runs);
+                Assert.NotNull (callbackThreadId);
+                Assert.Equal (0, ((ApplicationImpl)app).QueuedPostCount);
+            }
+            finally
+            {
+                runnable.Dispose ();
+                app.Dispose ();
+            }
+        }
+    }
+
     // Copilot - GPT-5.3-Codex
     [Fact]
     public void Send_PropagatesCallbackException ()
