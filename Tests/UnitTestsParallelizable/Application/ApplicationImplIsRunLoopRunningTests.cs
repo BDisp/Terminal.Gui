@@ -83,4 +83,55 @@ public class ApplicationImplIsRunLoopRunningTests
         // Only after the last runnable ends is no run loop running.
         Assert.False (afterFirstEnded);
     }
+
+    [Fact]
+    public void IsRunLoopRunning_IsFalse_AfterStopRequest ()
+    {
+        using IApplication app = Application.Create ();
+        app.Init (DriverRegistry.Names.ANSI);
+        ApplicationImpl impl = (ApplicationImpl)app;
+
+        using Runnable runnable = new ();
+        app.StopAfterFirstIteration = true;
+
+        app.Iteration += OnIteration;
+        app.Run (runnable);
+        app.Iteration -= OnIteration;
+
+        Assert.False (impl.IsRunLoopRunning);
+
+        return;
+
+        void OnIteration (object? _, EventArgs<IApplication?> __)
+        {
+            Assert.True (impl.IsRunLoopRunning);
+            app.RequestStop (runnable);
+        }
+    }
+
+    [Fact]
+    public void IsRunLoopRunning_IsFalse_AfterException ()
+    {
+        using IApplication app = Application.Create ();
+        app.Init (DriverRegistry.Names.ANSI);
+        ApplicationImpl impl = (ApplicationImpl)app;
+
+        using Runnable runnable = new ();
+        InvalidOperationException failure = new ("iteration failed");
+
+        app.Iteration += OnIteration;
+
+        Assert.Same (failure, Assert.Throws<InvalidOperationException> (() => app.Run (runnable)));
+        app.Iteration -= OnIteration;
+
+        Assert.False (impl.IsRunLoopRunning);
+
+        return;
+
+        void OnIteration (object? _, EventArgs<IApplication?> __)
+        {
+            Assert.True (impl.IsRunLoopRunning);
+            throw failure;
+        }
+    }
 }
