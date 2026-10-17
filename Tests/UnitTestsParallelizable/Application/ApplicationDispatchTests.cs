@@ -162,10 +162,12 @@ public class ApplicationDispatchTests
             owner = app.Begin (runnable)!;
             RunOnWorker (() =>
                          {
+                             callbackThreadId = Thread.CurrentThread.ManagedThreadId;
                              app.TimedEvents!.RunTimers ();
                              ((ApplicationImpl)app).DrainDispatches ();
                          });
-            Assert.Null (callbackThreadId);
+            Assert.NotNull (callbackThreadId);
+            Assert.NotEqual (app.MainThreadId, callbackThreadId);
 
             PumpUiDispatches (app);
 
