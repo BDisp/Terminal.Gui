@@ -1020,8 +1020,8 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
                             { IsBackground = true };
             worker.Start ();
 
-            int firstThreadId = await firstCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken).ConfigureAwait (false);
-            int secondThreadId = await secondCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken).ConfigureAwait (false);
+            int firstThreadId = await firstCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken);
+            int secondThreadId = await secondCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken);
 
             Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
             Assert.Equal (2, callbackCount);
