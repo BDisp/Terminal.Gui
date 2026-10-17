@@ -134,4 +134,46 @@ public class ApplicationImplIsRunLoopRunningTests
             throw failure;
         }
     }
+
+    [Fact]
+    public void IsRunLoopRunning_IsFalse_AfterNestedRunException ()
+    {
+        using IApplication app = Application.Create ();
+        app.Init (DriverRegistry.Names.ANSI);
+        ApplicationImpl impl = (ApplicationImpl)app;
+
+        using Runnable outer = new () { Id = "outer" };
+        using Runnable inner = new () { Id = "inner" };
+        InvalidOperationException failure = new ("nested iteration failed");
+
+        bool innerFailed = false;
+
+        app.Iteration += OnOuterIteration;
+
+        app.Run (outer);
+        app.Iteration -= OnOuterIteration;
+
+        Assert.False (impl.IsRunLoopRunning);
+
+        return;
+
+        void OnOuterIteration (object? _, EventArgs<IApplication?> __)
+        {
+            Assert.True (impl.IsRunLoopRunning);
+
+            if (!innerFailed && !inner.IsRunning)
+            {
+                Assert.Same (failure, Assert.Throws<InvalidOperationException> (() => app.Run (inner)));
+            }
+            else if (!innerFailed && !outer.StopRequested)
+            {
+                innerFailed = true;
+                throw failure;
+            }
+            else
+            {
+                app.RequestStop (outer);
+            }
+        }
+    }
 }

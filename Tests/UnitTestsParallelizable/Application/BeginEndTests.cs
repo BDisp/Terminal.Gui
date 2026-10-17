@@ -985,4 +985,58 @@ public class ApplicationImplBeginEndTests (ITestOutputHelper output)
             Assert.Equal (currentManagedThreadId, Thread.CurrentThread.ManagedThreadId);
         }
     }
+
+    // Copilot
+    [Fact]
+    public async Task Begin_WithoutRun_DrainsMultiplePostedCallbacks_AndEndRestoresContext ()
+    {
+        IApplication app = Application.Create ();
+        app.Init (DriverRegistry.Names.ANSI);
+        Runnable view = new ();
+        SessionToken token = app.Begin (view)!;
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+        TaskCompletionSource<int> firstCompleted = new (TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<int> secondCompleted = new (TaskCreationOptions.RunContinuationsAsynchronously);
+        int callbackCount = 0;
+
+        try
+        {
+            Thread worker = new (() =>
+                                 {
+                                     context.Post (_ =>
+                                                   {
+                                                       Interlocked.Increment (ref callbackCount);
+                                                       firstCompleted.TrySetResult (Thread.CurrentThread.ManagedThreadId);
+                                                   },
+                                                   null);
+
+                                     context.Post (_ =>
+                                                   {
+                                                       Interlocked.Increment (ref callbackCount);
+                                                       secondCompleted.TrySetResult (Thread.CurrentThread.ManagedThreadId);
+                                                   },
+                                                   null);
+                                 })
+                            { IsBackground = true };
+            worker.Start ();
+
+            int firstThreadId = await firstCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken).ConfigureAwait (false);
+            int secondThreadId = await secondCompleted.Task.WaitAsync (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken).ConfigureAwait (false);
+
+            Assert.True (worker.Join (TimeSpan.FromSeconds (5)));
+            Assert.Equal (2, callbackCount);
+            Assert.NotEqual (0, firstThreadId);
+            Assert.NotEqual (0, secondThreadId);
+
+            app.End (token);
+
+            Assert.Null (SynchronizationContext.Current);
+            Assert.Empty (app.SessionStack!);
+        }
+        finally
+        {
+            view.Dispose ();
+            app.Dispose ();
+        }
+    }
 }
