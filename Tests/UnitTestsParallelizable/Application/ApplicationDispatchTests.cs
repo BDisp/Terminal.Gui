@@ -802,6 +802,105 @@ public class ApplicationDispatchTests
         }
     }
 
+    // Copilot - GPT-5.3-Codex
+    [Fact]
+    public void Send_PropagatesCallbackException ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+        InvalidOperationException failure = new ("callback failed");
+
+        try
+        {
+            Exception? thrown = null;
+            Thread sender = new (() =>
+                                 {
+                                     try
+                                     {
+                                         context.Send (_ => throw failure, null);
+                                     }
+                                     catch (Exception ex)
+                                     {
+                                         thrown = ex;
+                                     }
+                                 })
+                            { IsBackground = true };
+
+            sender.Start ();
+            Assert.True (SpinWait.SpinUntil (() => ((ApplicationImpl)app).QueuedPostCount > 0, TimeSpan.FromSeconds (5)));
+
+            PumpUiDispatches (app);
+
+            Assert.True (sender.Join (TimeSpan.FromSeconds (5)));
+            Assert.Same (failure, thrown);
+        }
+        finally
+        {
+            app.End (owner);
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
+    // Copilot - GPT-5.3-Codex
+    [Fact]
+    public void Send_DoesNotDeadlock_WhenRunLoopStops ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+
+        try
+        {
+            int runs = 0;
+            Exception? sendError = null;
+            Exception? endError = null;
+            Thread sender = new (() =>
+                                 {
+                                     try
+                                     {
+                                         context.Send (_ => Interlocked.Increment (ref runs), null);
+                                     }
+                                     catch (Exception ex)
+                                     {
+                                         sendError = ex;
+                                     }
+                                 })
+                            { IsBackground = true };
+            Thread ender = new (() =>
+                                {
+                                    try
+                                    {
+                                        app.End (owner);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        endError = ex;
+                                    }
+                                })
+                           { IsBackground = true };
+
+            sender.Start ();
+            Assert.True (SpinWait.SpinUntil (() => ((ApplicationImpl)app).QueuedPostCount > 0, TimeSpan.FromSeconds (5)));
+
+            ender.Start ();
+
+            Assert.True (sender.Join (TimeSpan.FromSeconds (10)));
+            Assert.True (ender.Join (TimeSpan.FromSeconds (10)));
+            Assert.Null (sendError);
+            Assert.Null (endError);
+            Assert.Equal (1, runs);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
+
     // Claude - Opus 5.5
     [Fact]
     public void FinalSessionStoppingDuringDrain_ReleasesUnstartedPostToThreadPool ()
