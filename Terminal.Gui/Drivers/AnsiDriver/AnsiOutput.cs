@@ -61,6 +61,11 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     internal Func<Rectangle>? AppScreenGetter { get; set; }
 
     /// <summary>
+    ///     Gets whether terminal mouse reporting is disabled. Changed only by <see cref="SetMouseDisabled"/>.
+    /// </summary>
+    internal bool IsMouseDisabled { get; private set; }
+
+    /// <summary>
     ///     Initializes a new instance of <see cref="AnsiOutput"/>.
     ///     Checks if a real console is available for ANSI output and activates the alternate screen buffer.
     /// </summary>
@@ -156,6 +161,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         _currentCursor = new Cursor ();
         _consoleSize = new Size (80, 25);
         _lastBuffer.SetSize (_consoleSize.Width, _consoleSize.Height);
+
         if (initializeTerminal)
         {
             InitializeTerminal ();
@@ -176,8 +182,10 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         Write (EscSeqUtils.CSI_EnableBracketedPaste);
     }
 
-    internal bool IsMouseDisabled { get; private set; }
-
+    /// <summary>
+    ///     Writes the sequence that enables or disables terminal mouse reporting, then records the new state.
+    ///     Does nothing if the state is unchanged.
+    /// </summary>
     internal void SetMouseDisabled (bool disabled)
     {
         if (IsMouseDisabled == disabled)
@@ -189,6 +197,9 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         IsMouseDisabled = disabled;
     }
 
+    /// <summary>
+    ///     Re-sends the sequence for the current <see cref="IsMouseDisabled"/> state, for example after resuming from suspend.
+    /// </summary>
     internal void RestoreMouseReporting () => Write (IsMouseDisabled ? EscSeqUtils.CSI_DisableMouseEvents : EscSeqUtils.CSI_EnableMouseEvents);
 
     /// <inheritdoc/>

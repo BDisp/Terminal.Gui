@@ -144,6 +144,7 @@ public class AnsiComponentFactory : ComponentFactoryImpl<char>
         }
 
         _input.SetMouseDisabled (IsMouseDisabled);
+
         return _input;
     }
 
@@ -155,6 +156,7 @@ public class AnsiComponentFactory : ComponentFactoryImpl<char>
     public override IOutput CreateOutput ()
     {
         IOutput output = _output ?? new AnsiOutput (AppModel, IsMouseDisabled);
+
         if (output is AnsiOutput ansiMouseOutput)
         {
             ansiMouseOutput.SetMouseDisabled (IsMouseDisabled);

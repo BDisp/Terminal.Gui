@@ -113,13 +113,23 @@ internal class MainLoopCoordinator<TInputRecord> : IMainLoopCoordinator, IInline
 
             bool previous = output.IsMouseDisabled;
             output.SetMouseDisabled (disabled);
+
             try
             {
                 (_input as AnsiInput)?.SetMouseDisabled (disabled);
             }
             catch
             {
-                output.SetMouseDisabled (previous);
+                try
+                {
+                    output.SetMouseDisabled (previous);
+                }
+                catch (Exception rollbackError)
+                {
+                    // Keep the original failure; the rollback failure is secondary.
+                    Logging.Error ($"Failed to restore mouse reporting after a failed change: {rollbackError}");
+                }
+
                 throw;
             }
         }

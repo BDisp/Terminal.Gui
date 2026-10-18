@@ -19,7 +19,7 @@ public sealed class InlineTranscript : Scenario
         using Runnable composer = new () { Width = Dim.Fill (), Height = Dim.Auto (DimAutoStyle.Content, minimumContentDim: 3) };
         Label title = new () { Text = "Inline transcript · Enter sends · F2 mouse · F5 preview · F6 commit · Esc exits", Width = Dim.Fill (), Height = 1 };
         TextField input = new () { Y = 1, Width = Dim.Fill () };
-        Label status = new () { Y = 2, Text = "Mouse off: select/copy terminal text. F2 enables UI mouse.", Width = Dim.Fill (), Height = 1 };
+        Label status = new () { Y = 2, Text = "Mouse off: native select/copy. F2: UI mouse.", Width = Dim.Fill (), Height = 1 };
         using Label preview = new () { Y = 3, Text = "LIVE PREVIEW row 1\nLIVE PREVIEW row 2\nLIVE PREVIEW row 3\nLIVE PREVIEW row 4", Width = Dim.Fill () };
         composer.Add (title, input, status);
         Task producer = Task.CompletedTask;
@@ -56,8 +56,8 @@ public sealed class InlineTranscript : Scenario
 
             app.Mouse.IsMouseDisabled = !app.Mouse.IsMouseDisabled;
             status.Text = app.Mouse.IsMouseDisabled
-                              ? "Mouse off: select/copy terminal text. F2 enables UI mouse."
-                              : "Mouse on: interact with the composer. F2 restores terminal selection.";
+                              ? "Mouse off: native select/copy. F2: UI mouse."
+                              : "Mouse on: UI handles mouse. F2: native select.";
             key.Handled = true;
         };
 
