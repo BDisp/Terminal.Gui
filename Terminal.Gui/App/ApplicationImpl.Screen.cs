@@ -94,28 +94,10 @@ internal partial class ApplicationImpl
 
         if (AppModel == AppModel.Inline && _screen is { } screen)
         {
-            // On resize in inline mode, reset to row 0 and clear the screen.
-            // The next LayoutAndDraw will re-size the inline region from scratch.
-            _inlineScreenSized = false;
-
-            if (Driver is { } driver)
-            {
-                driver.InlinePosition = Point.Empty;
-
-                // Clear the entire terminal
-                if (!WriteInlineMovement ($"{EscSeqUtils.CSI}H{EscSeqUtils.CSI}2J"))
-                {
-                    return;
-                }
-            }
-
-            Screen = new Rectangle (0, 0, newSize.Width, screen.Height);
-            ClearScreenNextIteration = true;
+            BeginInlineResize (screen, newSize);
+            return;
         }
-        else
-        {
-            RaiseScreenChangedEvent (new Rectangle (new Point (0, 0), newSize));
-        }
+        RaiseScreenChangedEvent (new Rectangle (new Point (0, 0), newSize));
     }
 
     /// <inheritdoc/>
@@ -163,6 +145,10 @@ internal partial class ApplicationImpl
         InlineOutputOperation? candidate = previousLayoutAndDrawActive ? null : CaptureInlineOutput ();
         try
         {
+            if (!CompleteInlineResize ())
+            {
+                return;
+            }
             LayoutAndDrawCore (forceRedraw, candidate);
         }
         finally

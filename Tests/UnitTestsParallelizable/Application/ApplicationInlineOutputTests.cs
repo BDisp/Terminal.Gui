@@ -7,11 +7,12 @@ namespace ApplicationTests;
 [Collection ("Application Tests")]
 public class ApplicationInlineOutputTests
 {
-    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, int width = 12, int height = 6, AppModel model = AppModel.Inline)
+    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, int width = 12, int height = 6, AppModel model = AppModel.Inline,
+                                           ISizeMonitor? sizeMonitor = null)
     {
         output = new AnsiOutput (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, model);
         output.SetSize (width, height);
-        ApplicationImpl app = new (new AnsiComponentFactory (output: output));
+        ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: sizeMonitor));
         app.AppModel = model;
         if (model == AppModel.Inline)
         {
@@ -167,7 +168,7 @@ public class ApplicationInlineOutputTests
     public void InvalidGeometryFaultsBeforeInsertionAndResizeUsesExecutionWidth ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out _);
+        using ApplicationImpl app = Create (bytes, out _, sizeMonitor: Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true));
         using Runnable view = new () { Width = Dim.Fill (), Height = 2 };
         SessionToken owner = app.Begin (view)!;
         app.LayoutAndDraw ();
@@ -180,6 +181,8 @@ public class ApplicationInlineOutputTests
         app.Screen = new Rectangle (0, 0, 12, 2);
         Task print = app.PrintAboveAsync ("abcdefgh", TestContext.Current.CancellationToken);
         app.Driver!.SetScreenSize (4, 6);
+        ((AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ())
+            .ProcessInput ("\u001b[1;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         Assert.True (print.IsCompletedSuccessfully);
         Assert.Equal (2, app.Screen.Y);
@@ -401,7 +404,7 @@ public class ApplicationInlineOutputTests
     [Fact]
     public void ZeroTerminalSizeDefersAndRestoredSizeResumes ()
     {
-        using ApplicationImpl app = Create (new StringBuilder (), out _);
+        using ApplicationImpl app = Create (new StringBuilder (), out _, sizeMonitor: Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true));
         using Runnable view = new () { Height = 2 };
         SessionToken owner = app.Begin (view)!;
         app.LayoutAndDraw ();
@@ -410,6 +413,9 @@ public class ApplicationInlineOutputTests
         app.LayoutAndDraw ();
         Assert.False (print.IsCompleted);
         app.Driver.SetScreenSize (12, 6);
+        app.LayoutAndDraw ();
+        ((AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ())
+            .ProcessInput ("\u001b[1;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         Assert.True (print.IsCompletedSuccessfully);
         app.End (owner);

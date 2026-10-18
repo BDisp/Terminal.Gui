@@ -422,6 +422,9 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 
     private Cursor _currentCursor;
 
+    // Keep the physical cursor fixed while an inline resize CPR is outstanding.
+    internal bool IsInlineResizePending { get; set; }
+
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();
     private readonly Utf8Buffer _frameBuffer = new ();
@@ -436,7 +439,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     /// <inheritdoc/>
     public void SetCursor (Cursor cursor)
     {
-        if (!IsInlinePlacementKnown)
+        if (!IsInlinePlacementKnown || IsInlineResizePending)
         {
             return;
         }
@@ -553,7 +556,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
             if (AppModel == AppModel.Inline)
             {
                 Rectangle appScreen = AppScreenGetter?.Invoke () ?? default;
-                if (IsInlinePlacementKnown)
+                if (IsInlinePlacementKnown && !IsInlineResizePending)
                 {
                     Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
                     Restore ("\n");

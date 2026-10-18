@@ -251,6 +251,13 @@ tuirec record `
 
 ## Verifying inline output and mouse reporting
 
+To verify non-clearing resize on Windows, install `pywinpty` and `pyte`, build ScenarioRunner,
+then run `python Scripts/tuirec/verify-inline-resize.py`. This uses ConPTY directly because
+tuirec's keystroke scripts do not resize the PTY. The check resizes during streaming and an
+expanded preview, commits it, submits edited input after repeated resizes, and checks ordered,
+exactly-once history and clean exit. It saves `artifacts/InlineResize.cast`, including resize
+events, for replay. To select a different build, pass `--dll PATH`.
+
 To check the Inline Transcript scenario's history, keyboard editing, and F2 mouse toggle,
 build ScenarioRunner in Release, install `pyte`, and run:
 

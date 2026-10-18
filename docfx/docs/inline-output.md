@@ -167,8 +167,25 @@ lifetime because cleanup cannot be proven. Exhausting the bounded Sixel placemen
 requires a fresh output lifetime. Ordinary raster rendering remains available
 for applications that do not use this API.
 
-Resize preservation remains separate work: the current resize handler still clears visible
-rows and resets origin. Terminal reflow during a physical write, external Console writes,
+## Terminal resize
+
+The built-in ANSI driver queries the terminal cursor after a resize and recovers the live
+origin using the cursor's previous relative row. It erases and repaints the recovered live
+rows at the new width without a display/scrollback clear or replaying completed messages.
+Layout, printing, and cursor updates wait for recovery; input and dispatch remain available.
+Repeated size changes discard replies for earlier sizes. Zero-size terminals defer recovery
+until positive dimensions return. Headless/custom drivers retain their known origin, clamped
+to fit the new terminal.
+
+A missing or invalid cursor reply, or a failed physical erase, makes placement uncertain.
+Pending printing faults and further live placement stops under the same failure policy as
+insertion. To recover, stop and create a fresh initialized application.
+
+The terminal owns resize reflow and history retention. It may move already displayed cells,
+including parts of an old live frame, into history during the resize itself; the renderer
+does not rewrite or delete terminal-owned history. Raster history remains unsupported.
+
+Terminal reflow during a physical write, external Console writes,
 raw cursor/mode changes, or another application sharing the terminal are outside the
 serialization contract. Terminal width disagreement can affect wrapping.
 

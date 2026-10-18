@@ -1,4 +1,5 @@
 using System.Text;
+using Moq;
 using System.Text.RegularExpressions;
 
 namespace DriverTests.Output;
@@ -218,16 +219,91 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    [Theory]
+    [InlineData (20, 12)]
+    [InlineData (20, 10)]
+    public void Resize_PreservesShellCompletedMessagesAndUnownedRows (int width, int height)
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[12;1HUNOWNED BELOW");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor))
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 6)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "LIVE" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        Task first = app.PrintAboveAsync (owner, "done one", TestContext.Current.CancellationToken);
+        app.LayoutAndDraw ();
+        Assert.True (first.IsCompletedSuccessfully);
+        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
+        terminal.Feed (bytes.ToString ());
+        bytes.Clear ();
+
+        terminal.Resize (width, height);
+        app.Driver!.SetScreenSize (width, height);
+        Task second = app.PrintAboveAsync (owner, "done two", TestContext.Current.CancellationToken);
+        app.LayoutAndDraw ();
+        Assert.False (second.IsCompleted);
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
+        string response = $"\u001b[{terminal.CursorRow + 1};1R";
+        parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.True (second.IsCompletedSuccessfully);
+        string [] lines = [.. terminal.History, .. terminal.Rows.Select (row => new string (row).TrimEnd ())];
+        Assert.Single (lines, line => line == "SHELL ZERO");
+        Assert.Single (lines, line => line == "SHELL ONE");
+        Assert.Single (lines, line => line == "done one");
+        Assert.Single (lines, line => line == "done two");
+        Assert.Equal ("UNOWNED BELOW", lines.Last ());
+        Assert.DoesNotContain (terminal.History, line => line.Contains ("LIVE", StringComparison.Ordinal));
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
+        app.End (owner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {
         internal List<char []> Rows { get; } = [];
         internal List<string> History { get; } = [];
-        private readonly int _width;
-        private readonly int _height;
+        private int _width;
+        private int _height;
         private int _row;
         private int _column;
         private bool _wrapPending;
+
+        internal int CursorRow => _row;
+
+        internal void Resize (int width, int height)
+        {
+            int removed = Math.Max (0, _height - height);
+            for (var index = 0; index < removed; index++)
+            {
+                History.Add (new string (Rows [0]).TrimEnd ());
+                Rows.RemoveAt (0);
+            }
+            for (var index = 0; index < Rows.Count; index++)
+            {
+                char [] resized = new string (' ', width).ToCharArray ();
+                Array.Copy (Rows [index], resized, Math.Min (_width, width));
+                Rows [index] = resized;
+            }
+            _row = Math.Clamp (_row - removed, 0, height - 1);
+            _column = Math.Min (_column, width - 1);
+            _width = width;
+            _height = height;
+            _wrapPending = false;
+        }
 
         internal Grid (int width, int height)
         {
