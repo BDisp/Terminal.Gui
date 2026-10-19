@@ -29,6 +29,11 @@ internal partial class ApplicationImpl
                 _screen = value;
                 _inlineScreenHasValidOwnership = Driver is { } owner && value.X == 0 && value.Width == owner.Screen.Width
                                                 && value.Y >= 0 && value.Height >= 0 && (long)value.Y + value.Height <= owner.Screen.Height;
+                if (_inlineScreenHasValidOwnership && value.Height > 0 && Driver is DriverImpl inlineDriver
+                    && inlineDriver.GetOutput () is AnsiOutput output)
+                {
+                    output.InlineSizeTrackingEnabled = true;
+                }
                 (Driver as DriverImpl)?.ResizeOutputBuffer (value.Width, value.Height);
 
                 RaiseScreenChangedEvent (value);

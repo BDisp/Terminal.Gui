@@ -6,7 +6,7 @@ internal partial class ApplicationImpl
 {
     private InlineResize? _inlineResize;
 
-    private void BeginInlineResize (Rectangle region, Size size)
+    private void BeginInlineResize (Rectangle region, Size size, bool observePolledSize = true)
     {
         if (Driver is not { } currentDriver)
         {
@@ -35,18 +35,13 @@ internal partial class ApplicationImpl
         }
         if (_inlineResize is { } pending)
         {
+            ConsumeInlineSizeObservations (pending, output);
             pending.ObserveSize (size);
             if (pending.Size == size)
             {
                 return;
             }
             pending.Size = size;
-            pending.Revision++;
-            pending.Row = null;
-            if (!pending.QueryPending)
-            {
-                pending.Started = null;
-            }
             return;
         }
 
@@ -56,16 +51,21 @@ internal partial class ApplicationImpl
             Size = size,
             CursorOffset = output.InlineCursorRow.GetValueOrDefault () - region.Y,
             ObservedSize = output.InlineCursorSize,
+            GeometrySize = output.InlineCursorSize,
             MinimumCursorRow = output.InlineCursorRow.GetValueOrDefault (),
             MaximumCursorRow = output.InlineCursorRow.GetValueOrDefault (),
             Generation = _inlineOutputGeneration,
             Failed = !_inlineScreenHasValidOwnership || output.InlineCursorRow is null || output.InlineCursorRow < region.Y
                      || output.InlineCursorRow >= region.Y + Math.Max (1, region.Height)
         };
-        resize.ObserveSize (size);
+        ConsumeInlineSizeObservations (resize, output);
+        if (observePolledSize)
+        {
+            resize.ObserveSize (size);
+        }
         _inlineResize = resize;
         output.IsInlineResizePending = true;
-        if (!resize.Failed && size.Width > 0 && size.Height > 0)
+        if (!resize.Failed && size.Width > 0 && size.Height > 0 && resize.ObservedSize == size)
         {
             QueryInlineResizeCursor (resize, driver);
         }
@@ -149,19 +149,37 @@ internal partial class ApplicationImpl
 
     private static bool ObserveNativeInlineResizeSize (InlineResize resize, AnsiOutput output)
     {
-        if (output.NativeSizeQuery?.Invoke () is not { } size)
+        Size? native = output.QueryNativeInlineSize ();
+        ConsumeInlineSizeObservations (resize, output);
+        return resize.Failed || resize.ObservedSize != resize.Size || native is { } size && size != resize.Size;
+    }
+
+    private static void ConsumeInlineSizeObservations (InlineResize resize, AnsiOutput output)
+    {
+        while (output.TryDequeueInlineSize (out Size size))
         {
-            return false;
+            resize.ObserveSize (size);
         }
-        resize.ObserveSize (size);
-        return resize.Failed || size != resize.Size;
+        resize.Failed |= output.InlineSizeObservationOverflow;
     }
 
     // Called after size polling, before layout/printing. CPR callbacks only record a position:
     // user callbacks and a second physical resize must not publish stale geometry mid-input dispatch.
     private bool CompleteInlineResize ()
     {
-        if (_inlineResize is not { } resize || Driver is not DriverImpl driver)
+        if (Driver is not DriverImpl driver)
+        {
+            return true;
+        }
+        if (_inlineResize is null && driver.GetOutput () is AnsiOutput { IsInlineOutputAvailable: true } observedOutput && _screen is { } ownedRegion)
+        {
+            observedOutput.QueryNativeInlineSize ();
+            if (observedOutput.HasInlineSizeObservations)
+            {
+                BeginInlineResize (ownedRegion, driver.Screen.Size, observePolledSize: false);
+            }
+        }
+        if (_inlineResize is not { } resize)
         {
             return true;
         }
@@ -259,24 +277,36 @@ internal partial class ApplicationImpl
         internal bool Failed { get; set; }
         internal int Revision { get; set; }
         internal Size ObservedSize { get; set; }
+        internal Size GeometrySize { get; set; }
         internal int MinimumCursorRow { get; set; }
         internal int MaximumCursorRow { get; set; }
         internal bool MayHaveClamped { get; set; }
 
         internal void ObserveSize (Size size)
         {
-            if (size.Width <= 0 || size.Height <= 0 || size == ObservedSize)
+            if (size == ObservedSize)
+            {
+                return;
+            }
+            ObservedSize = size;
+            Revision++;
+            Row = null;
+            if (!QueryPending)
+            {
+                Started = null;
+            }
+            if (size.Width <= 0 || size.Height <= 0 || size == GeometrySize)
             {
                 return;
             }
             // Once a resize could have clamped the cursor, a later resize can move it back
             // into the interior. A new CPR then cannot prove ownership was preserved.
-            Failed |= MayHaveClamped || ObservedSize.Height <= 0;
-            int removed = Math.Max (0, ObservedSize.Height - size.Height);
+            Failed |= MayHaveClamped || GeometrySize.Height <= 0;
+            int removed = Math.Max (0, GeometrySize.Height - size.Height);
             MayHaveClamped |= MinimumCursorRow <= removed || MaximumCursorRow >= size.Height;
             MinimumCursorRow = Math.Max (0, MinimumCursorRow - removed);
-            MaximumCursorRow = Math.Min (size.Height - 1, MaximumCursorRow + Math.Max (0, size.Height - ObservedSize.Height));
-            ObservedSize = size;
+            MaximumCursorRow = Math.Min (size.Height - 1, MaximumCursorRow + Math.Max (0, size.Height - GeometrySize.Height));
+            GeometrySize = size;
         }
     }
 }

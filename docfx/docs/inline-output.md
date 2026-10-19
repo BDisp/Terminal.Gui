@@ -198,11 +198,17 @@ range across observed resizes. If an intermediate resize could clamp the cursor,
 size change before recovery completes stops placement, even if the next report is inside
 the terminal. This uncertainty survives superseded replies, native sizes observed before
 polling, and shrink-then-enlarge sequences that restore scrollback into the viewport.
-Native size changes detected before recovery, reservation, shrink, or printing defer writes
-until the next size poll. Superseded reports are consumed before their coordinate bounds
+Native size transitions detected by frame, caret, or polling guards are retained until
+recovery consumes them, including transitions observed before recovery starts. Writes remain
+blocked even if dimensions return to the already-polled size. Every observed transition
+invalidates an accepted cursor report and advances its query revision; safe recovery then
+requires a fresh report. If the native size provider becomes unavailable, the last observed
+transition remains pending until polling catches up. An overflow of retained transitions
+stops placement rather than dropping evidence.
+Native size changes detected before reservation, shrink, or printing likewise defer writes.
+Superseded reports are consumed before their coordinate bounds
 are checked against the current resize revision, while clamping uncertainty remains sticky.
-Disposal restores terminal modes without
-placing the cursor using stale dimensions.
+Disposal restores terminal modes without placing the cursor using stale dimensions.
 
 The terminal owns resize reflow and history retention. It may move already displayed cells,
 including parts of an old live frame, into history during the resize itself; the renderer

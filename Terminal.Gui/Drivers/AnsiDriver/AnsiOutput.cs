@@ -229,7 +229,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         {
             return _consoleSize;
         }
-        Size? native = NativeSizeQuery ();
+        Size? native = QueryNativeInlineSize ();
 
         if (native is { })
         {
@@ -451,10 +451,43 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
                 return;
             }
             InlineCursorSize = _consoleSize;
+            if (!HasInlineSizeObservations)
+            {
+                _lastInlineObservedSize = _consoleSize;
+            }
         }
     }
 
     internal Size InlineCursorSize { get; private set; }
+    internal bool InlineSizeTrackingEnabled { get; set; }
+    private Size? _lastInlineObservedSize;
+    private readonly Queue<Size> _inlineSizeObservations = [];
+    internal bool InlineSizeObservationOverflow { get; private set; }
+    internal bool HasInlineSizeObservations => _inlineSizeObservations.Count > 0 || InlineSizeObservationOverflow;
+
+    internal bool TryDequeueInlineSize (out Size size) => _inlineSizeObservations.TryDequeue (out size);
+
+    internal Size? QueryNativeInlineSize ()
+    {
+        Size? native = NativeSizeQuery?.Invoke ();
+        if (!InlineSizeTrackingEnabled || !IsInlineOutputAvailable || native is not { } size || size == _lastInlineObservedSize)
+        {
+            return native;
+        }
+        if (_lastInlineObservedSize is null)
+        {
+            _lastInlineObservedSize = size;
+            return native;
+        }
+        _lastInlineObservedSize = size;
+        if (_inlineSizeObservations.Count >= 64)
+        {
+            InlineSizeObservationOverflow = true;
+            return native;
+        }
+        _inlineSizeObservations.Enqueue (size);
+        return native;
+    }
     private int? _stagedInlineCursorRow;
 
     // Keep the physical cursor fixed while an inline resize CPR is outstanding.
@@ -463,7 +496,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     private bool HasPendingInlineSizeChange () => HasPendingInlineSizeChange (_consoleSize);
 
     internal bool HasPendingInlineSizeChange (Size expectedSize) =>
-        AppModel == AppModel.Inline && NativeSizeQuery?.Invoke () is { } size && size != expectedSize;
+        AppModel == AppModel.Inline && (QueryNativeInlineSize () is { } size && size != expectedSize || HasInlineSizeObservations);
 
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();

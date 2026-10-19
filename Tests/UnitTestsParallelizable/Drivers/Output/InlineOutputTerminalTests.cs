@@ -493,6 +493,144 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void NativeTransitionAfterAcceptedReport_RequiresFreshReportBeforeErasing (bool immediatelyBeforeErase)
+    {
+        Grid terminal = new (30, 24);
+        for (var row = 16; row < 24; row++)
+        {
+            terminal.Feed ($"\u001b[{row + 1};1HUNOWNED{row}");
+        }
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 24);
+        VirtualTimeProvider time = new ();
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor), time)
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 10)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE0\nLIVE1\nLIVE2\nLIVE3\nLIVE4\nLIVE5" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+        terminal.Resize (20, 20);
+        ((DriverImpl)app.Driver!).AnsiRequestScheduler.Now = () => time.Now;
+        app.Driver.SetScreenSize (20, 20);
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
+        parser.ProcessInput ("\u001b[7;1R".Select (character => Tuple.Create (character, character)).ToArray ());
+        bytes.Clear ();
+        int reads = 0;
+        output.NativeSizeQuery = () =>
+        {
+            if (immediatelyBeforeErase && ++reads == 1)
+            {
+                return new Size (20, 20);
+            }
+            if (terminal.Rows.Count == 20)
+            {
+                terminal.Resize (20, 18);
+            }
+            return new Size (20, 18);
+        };
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        Assert.Equal (10, app.Screen.Y);
+
+        terminal.Resize (20, 20);
+        output.NativeSizeQuery = () => new Size (20, 20);
+        string [] unowned = [.. terminal.Rows.Skip (10).Take (8).Select (row => new string (row))];
+        string [] history = [.. terminal.History];
+        time.Advance (TimeSpan.FromMilliseconds (200));
+        app.LayoutAndDraw ();
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.True (output.IsInlineResizePending);
+        string response = $"\u001b[{terminal.CursorRow + 1};1R";
+        parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.Equal (new Rectangle (0, 4, 20, 6), app.Screen);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.False (output.IsInlineResizePending);
+        Assert.Equal (unowned, terminal.Rows.Skip (10).Take (8).Select (row => new string (row)));
+        Assert.Equal (history, terminal.History);
+        app.End (owner);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (0, 12)]
+    [InlineData (1, 12)]
+    [InlineData (2, 12)]
+    [InlineData (0, 18)]
+    [InlineData (1, 18)]
+    [InlineData (2, 18)]
+    public void NativeClampObservedBeforeRecovery_BlocksWritesUntilPlacementFails (int surface, int finalHeight)
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO\u001b[4;1HSHELL THREE");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor))
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 4)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+        bytes.Clear ();
+        Size native = new (20, 3);
+        output.NativeSizeQuery = () => native;
+        terminal.Resize (20, 3, clipBottom: true);
+        Observe ();
+        terminal.Resize (30, finalHeight, clipBottom: true);
+        native = new Size (30, finalHeight);
+        Observe ();
+        output.SetCursor (new Cursor { Position = Point.Empty });
+        Assert.Empty (bytes.ToString ());
+        string [] surviving = [.. terminal.Rows.Select (row => new string (row))];
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        if (finalHeight != 12)
+        {
+            app.Driver!.SetScreenSize (30, finalHeight);
+        }
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Empty (bytes.ToString ());
+        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
+        Assert.Empty (terminal.History);
+        app.End (owner);
+
+        void Observe ()
+        {
+            if (surface == 0)
+            {
+                output.Write (((DriverImpl)app.Driver!).GetOutputBuffer ());
+                return;
+            }
+            if (surface == 1)
+            {
+                output.SetCursor (new Cursor { Position = Point.Empty });
+                return;
+            }
+            output.GetSize ();
+        }
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {
