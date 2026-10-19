@@ -324,6 +324,15 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 
     internal override void FlushFrame ()
     {
+        // Rendering hides the caret. Park at the first live row until the main loop restores it,
+        // reducing bottom-edge clamping if the terminal resizes between drawing and caret update.
+        if (_batchMode && AppModel == AppModel.Inline && AppScreenGetter?.Invoke () is { Height: > 0 } region
+            && (_frameBuffer.Length > 0 || _pendingCursorMoves.Length > 0))
+        {
+            _pendingCursorMoves.Clear ();
+            _pendingCursorMoves.AppendAscii (EscSeqUtils.CSI_SetCursorPosition (region.Y + 1, 1));
+            _stagedInlineCursorRow = region.Y;
+        }
         if (_pendingCursorMoves.Length > 0)
         {
             _frameBuffer.Append (_pendingCursorMoves);
@@ -437,7 +446,10 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     // Keep the physical cursor fixed while an inline resize CPR is outstanding.
     internal bool IsInlineResizePending { get; set; }
 
-    private bool HasPendingInlineSizeChange () => AppModel == AppModel.Inline && NativeSizeQuery?.Invoke () is { } size && size != _consoleSize;
+    private bool HasPendingInlineSizeChange () => HasPendingInlineSizeChange (_consoleSize);
+
+    internal bool HasPendingInlineSizeChange (Size expectedSize) =>
+        AppModel == AppModel.Inline && NativeSizeQuery?.Invoke () is { } size && size != expectedSize;
 
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();
@@ -573,7 +585,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
             if (AppModel == AppModel.Inline)
             {
                 Rectangle appScreen = AppScreenGetter?.Invoke () ?? default;
-                if (IsInlinePlacementKnown && !IsInlineResizePending)
+                if (IsInlinePlacementKnown && !IsInlineResizePending && !HasPendingInlineSizeChange ())
                 {
                     Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
                     Restore ("\n");

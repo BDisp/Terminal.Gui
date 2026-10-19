@@ -312,6 +312,52 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (5, 6)]
+    [InlineData (1, 4)]
+    [InlineData (0, 3)]
+    [InlineData (0, 1)]
+    public void BottomClippingResize_ClampedCursorNeverErasesPrecedingOutput (int cursorOffset, int height)
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor))
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 3)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE0\nLIVE1\nLIVE2\nLIVE3\nLIVE4\nLIVE5" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, cursorOffset), Style = CursorStyle.SteadyBar });
+        terminal.Feed (bytes.ToString ());
+        Assert.Equal (3 + cursorOffset, terminal.CursorRow);
+        bytes.Clear ();
+        terminal.Resize (20, height, clipBottom: true);
+        string [] surviving = [.. terminal.Rows.Select (row => new string (row))];
+
+        app.Driver!.SetScreenSize (20, height);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
+        string response = $"\u001b[{terminal.CursorRow + 1};1R";
+        parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
+        Assert.Empty (terminal.History);
+        app.End (owner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {

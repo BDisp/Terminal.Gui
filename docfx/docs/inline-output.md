@@ -172,20 +172,31 @@ for applications that do not use this API.
 The built-in ANSI driver queries the terminal cursor after a resize and recovers the live
 origin using the last successfully written physical cursor row, independently of the caret
 cache. It erases only surviving live rows before reserving any missing height through
-controlled scrolling, then repaints the recovered live
-rows at the new width without a display/scrollback clear or replaying completed messages.
+controlled scrolling, then repaints the recovered live rows at the new width without a
+display/scrollback clear or replaying completed messages.
+Frames park the hidden cursor at the first live row before the main loop restores the
+visible caret, reducing avoidable bottom-edge clamping during a resize.
 Layout, printing, and cursor updates wait for recovery; input and dispatch remain available.
 Repeated size changes discard replies for earlier sizes. Zero-size terminals defer recovery
 until positive dimensions return. Headless/custom drivers retain their known origin, clamped
 to fit the new terminal.
 
-A missing, abandoned, or invalid cursor reply, a partial-width/invalid old reservation,
-an unknown physical cursor, or a failed physical erase makes placement uncertain.
+A missing, abandoned, or invalid cursor reply, a report on the terminal's bottom row,
+a partial-width/invalid old reservation, an unknown physical cursor, or a failed physical
+erase makes placement uncertain.
 Pending printing faults and further live placement stops under the same failure policy as
 insertion. Failure cannot be reset by another size change. Cursor-position reports have no
 request identifiers, so an abandoned request (including an earlier startup query) cannot
 be retried safely during the same output lifetime. To recover, stop and create a fresh
 initialized application.
+
+A bottom-row report is ambiguous: a terminal can clamp the cursor while clipping live
+rows below it, or scroll the live region upward. Recovery stops without erasing in either
+case because the same report cannot establish which rows still belong to the application.
+Native size changes detected before recovery, reservation, shrink, or printing defer writes
+until the next size poll. Superseded reports are consumed before their coordinate bounds
+are checked against the current resize revision. Disposal restores terminal modes without
+placing the cursor using stale dimensions.
 
 The terminal owns resize reflow and history retention. It may move already displayed cells,
 including parts of an old live frame, into history during the resize itself; the renderer

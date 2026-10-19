@@ -98,15 +98,23 @@ internal partial class ApplicationImpl
                     return;
                 }
                 Match match = Regex.Match (response ?? string.Empty, @"^\x1b\[\??(\d+);(\d+)R$");
-                if (!match.Success || !int.TryParse (match.Groups [1].Value, out int row) || row <= 0 || row > size.Height
-                    || !int.TryParse (match.Groups [2].Value, out int column) || column <= 0 || column > size.Width)
+                if (!match.Success || !int.TryParse (match.Groups [1].Value, out int row) || row <= 0
+                    || !int.TryParse (match.Groups [2].Value, out int column) || column <= 0)
                 {
                     resize.Failed = true;
                     return;
                 }
-                if (resize.Revision != revision)
+                if (resize.Revision != revision
+                    || driver.GetOutput () is AnsiOutput output && output.HasPendingInlineSizeChange (size))
                 {
                     resize.Started = null;
+                    return;
+                }
+                // At the bottom edge CPR cannot distinguish scrolling from a clamped cursor.
+                // Even offset zero may point at transcript when the entire live region was clipped.
+                if (row >= size.Height || column > size.Width)
+                {
+                    resize.Failed = true;
                     return;
                 }
                 resize.Row = row - 1;
@@ -159,6 +167,10 @@ internal partial class ApplicationImpl
         {
             return false;
         }
+        if (driver.GetOutput () is AnsiOutput currentOutput && currentOutput.HasPendingInlineSizeChange (resize.Size))
+        {
+            return false;
+        }
         if (resize.Row is not { } row)
         {
             if (!resize.QueryPending)
@@ -180,7 +192,7 @@ internal partial class ApplicationImpl
             erase.Append (EscSeqUtils.CSI + "2K");
         }
         erase.Append (EscSeqUtils.CSI_SetCursorPosition (origin + 1, 1));
-        if (!WriteInlineMovement (erase.ToString ()))
+        if (!WriteInlineMovement (erase.ToString (), resize.Size))
         {
             return false;
         }
