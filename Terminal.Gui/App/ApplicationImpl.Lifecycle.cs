@@ -83,6 +83,7 @@ internal partial class ApplicationImpl
             _inlineOutputFailure = null;
             _inlineScreenSized = false;
             _inlineResize = null;
+            _inlineScreenHasValidOwnership = false;
             _inlineOriginEstablished = false;
             _screen = null;
             Volatile.Write (ref _dispatchStopping, false);

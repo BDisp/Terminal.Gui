@@ -5,6 +5,8 @@ namespace Terminal.Gui.App;
 
 internal partial class ApplicationImpl
 {
+    private bool _inlineScreenHasValidOwnership;
+
     /// <inheritdoc/>
     public event EventHandler<EventArgs<Rectangle>>? ScreenChanged;
 
@@ -25,6 +27,8 @@ internal partial class ApplicationImpl
                 // Inline mode: store the sub-rectangle independently.
                 // Resize the output buffer to match the inline region dimensions.
                 _screen = value;
+                _inlineScreenHasValidOwnership = Driver is { } owner && value.X == 0 && value.Width == owner.Screen.Width
+                                                && value.Y >= 0 && value.Height >= 0 && (long)value.Y + value.Height <= owner.Screen.Height;
                 (Driver as DriverImpl)?.ResizeOutputBuffer (value.Width, value.Height);
 
                 RaiseScreenChangedEvent (value);
@@ -62,7 +66,17 @@ internal partial class ApplicationImpl
     /// <param name="screen">The new screen size and position.</param>
     private void RaiseScreenChangedEvent (Rectangle screen)
     {
-        //Screen = new (Point.Empty, screen.Size);
+        if (AppModel == AppModel.Inline && _inlineResize is null && _inlineScreenHasValidOwnership && screen.Height > 0
+            && Driver is DriverImpl driver && driver.GetOutput () is AnsiOutput
+            { IsInlineOutputAvailable: true, InlineCursorRow: null, HasPendingOutputRecovery: false } output
+            && !InlinePlacementLost)
+        {
+            if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (screen.Y + 1, 1)))
+            {
+                return;
+            }
+            output.InlineCursorRow = screen.Y;
+        }
 
         ScreenChanged?.Invoke (this, new EventArgs<Rectangle> (screen));
 
@@ -183,7 +197,8 @@ internal partial class ApplicationImpl
 
         IDriver? passDriver = Driver;
         long passGeneration = _inlineOutputGeneration;
-        bool PassIsValid () => Initialized && !_dispatchStopping && Driver == passDriver && passGeneration == _inlineOutputGeneration && !InlinePlacementLost && HasRunningSession;
+        bool PassIsValid () => Initialized && !_dispatchStopping && Driver == passDriver && passGeneration == _inlineOutputGeneration
+                              && !InlinePlacementLost && _inlineResize is null && HasRunningSession;
 
         // A session ended beneath the top stays on the stack without a runnable until the sessions above it end.
         List<View?> views = [.. SessionStack.Select (r => r.Runnable).OfType<View> ()];

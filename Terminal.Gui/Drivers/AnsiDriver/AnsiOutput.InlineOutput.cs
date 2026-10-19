@@ -53,10 +53,12 @@ public partial class AnsiOutput
                 Write ($"{EscSeqUtils.CSI_SetCursorPosition (row + 1, 1)}{EscSeqUtils.CSI_ResetAttributes}{EscSeqUtils.CSI}2K");
             }
             Write (EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes);
+            InlineCursorRow = destination + region.Height - 1;
             return destination;
         }
         catch
         {
+            InlineCursorRow = null;
             IsInlinePlacementKnown = false;
             throw;
         }

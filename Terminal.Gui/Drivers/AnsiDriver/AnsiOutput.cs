@@ -293,11 +293,12 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     /// <inheritdoc cref="IOutput.Write(IOutputBuffer)"/>
     public override void Write (IOutputBuffer buffer)
     {
-        if (!IsInlinePlacementKnown)
+        if (!IsInlinePlacementKnown || IsInlineResizePending || HasPendingInlineSizeChange ())
         {
             return;
         }
         _lastBuffer = buffer;
+        _stagedInlineCursorRow = InlineCursorRow;
         // An out-of-band legacy attribute hook must take effect between physical writes.
         _batchMode = !UsesLegacyAttributeWriter && !HasCustomStringWriter (typeof (AnsiOutput));
         _frameBuffer.Clear ();
@@ -305,6 +306,11 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         try
         {
             base.Write (buffer);
+        }
+        catch
+        {
+            InlineCursorRow = null;
+            throw;
         }
         finally
         {
@@ -329,6 +335,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         if (_frameBuffer.Length > 0)
         {
             Write (_frameBuffer.AsSpan ());
+            InlineCursorRow = _stagedInlineCursorRow;
         }
     }
 
@@ -422,8 +429,15 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 
     private Cursor _currentCursor;
 
+    private int? _inlineCursorRow;
+    // Absolute physical row, committed only after a successful CUP/frame write.
+    internal int? InlineCursorRow { get => HasPendingOutputRecovery ? null : _inlineCursorRow; set => _inlineCursorRow = value; }
+    private int? _stagedInlineCursorRow;
+
     // Keep the physical cursor fixed while an inline resize CPR is outstanding.
     internal bool IsInlineResizePending { get; set; }
+
+    private bool HasPendingInlineSizeChange () => AppModel == AppModel.Inline && NativeSizeQuery?.Invoke () is { } size && size != _consoleSize;
 
     // PERF: Batch mode — defer cursor-move sequences to merge with cell content, reducing WriteFile P/Invoke count
     private readonly Utf8Buffer _pendingCursorMoves = new ();
@@ -439,7 +453,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
     /// <inheritdoc/>
     public void SetCursor (Cursor cursor)
     {
-        if (!IsInlinePlacementKnown || IsInlineResizePending)
+        if (!IsInlinePlacementKnown || IsInlineResizePending || HasPendingInlineSizeChange ())
         {
             return;
         }
@@ -463,6 +477,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
         {
+            InlineCursorRow = null;
             // Best effort: a broken sink also fails the next frame, which DriverImpl logs once.
             Logging.Debug ($"Error updating ANSI cursor: {ex.Message}");
         }
@@ -488,10 +503,12 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
             // into a single WriteFile P/Invoke instead of one per cursor move.
             _pendingCursorMoves.Clear ();
             _pendingCursorMoves.AppendAscii (EscSeqUtils.CSI_SetCursorPosition (row + 1 + inlineRowOffset, col + 1));
+            _stagedInlineCursorRow = row + inlineRowOffset;
         }
         else
         {
             Write (EscSeqUtils.CSI_SetCursorPosition (row + 1 + inlineRowOffset, col + 1));
+            InlineCursorRow = row + inlineRowOffset;
         }
 
         return true;

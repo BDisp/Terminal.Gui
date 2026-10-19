@@ -271,6 +271,47 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    [Fact]
+    public void BottomClippingResize_ErasesOnlySurvivingLiveRowsBeforeScrolling ()
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor))
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 3)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE0\nLIVE1\nLIVE2\nLIVE3\nLIVE4\nLIVE5" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = Point.Empty, Style = CursorStyle.SteadyBar });
+        terminal.Feed (bytes.ToString ());
+        bytes.Clear ();
+        terminal.Resize (20, 6, clipBottom: true);
+
+        app.Driver!.SetScreenSize (20, 6);
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
+        parser.ProcessInput ("\u001b[4;1R".Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        string writes = bytes.ToString ();
+        terminal.Feed (writes);
+
+        Assert.Equal (["SHELL ZERO", "SHELL ONE", "SHELL TWO"], terminal.History);
+        Assert.DoesNotContain (terminal.History, line => line.Contains ("LIVE", StringComparison.Ordinal));
+        Assert.Equal (new Rectangle (0, 0, 20, 6), app.Screen);
+        string beforeScrolling = writes [..writes.IndexOf ('\n')];
+        Assert.DoesNotContain ("[1;1H", beforeScrolling);
+        Assert.DoesNotContain ("[2;1H", beforeScrolling);
+        Assert.DoesNotContain ("[3;1H", beforeScrolling);
+        Assert.Equal (["LIVE0", "LIVE1", "LIVE2", "LIVE3", "LIVE4", "LIVE5"], terminal.Rows.Select (row => new string (row).TrimEnd ()));
+        app.End (owner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {
@@ -284,11 +325,16 @@ public class InlineOutputTerminalTests
 
         internal int CursorRow => _row;
 
-        internal void Resize (int width, int height)
+        internal void Resize (int width, int height, bool clipBottom = false)
         {
             int removed = Math.Max (0, _height - height);
             for (var index = 0; index < removed; index++)
             {
+                if (clipBottom)
+                {
+                    Rows.RemoveAt (Rows.Count - 1);
+                    continue;
+                }
                 History.Add (new string (Rows [0]).TrimEnd ());
                 Rows.RemoveAt (0);
             }
@@ -298,7 +344,7 @@ public class InlineOutputTerminalTests
                 Array.Copy (Rows [index], resized, Math.Min (_width, width));
                 Rows [index] = resized;
             }
-            _row = Math.Clamp (_row - removed, 0, height - 1);
+            _row = Math.Clamp (_row - (clipBottom ? 0 : removed), 0, height - 1);
             _column = Math.Min (_column, width - 1);
             _width = width;
             _height = height;

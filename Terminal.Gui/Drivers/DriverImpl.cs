@@ -209,6 +209,8 @@ internal class DriverImpl : IDriver
     /// <inheritdoc/>
     public IInputProcessor GetInputProcessor () => _inputProcessor;
 
+    internal AnsiRequestScheduler AnsiRequestScheduler => _ansiRequestScheduler;
+
     private readonly IOutputBuffer _outputBuffer;
 
     private readonly ISizeMonitor _sizeMonitor;

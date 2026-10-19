@@ -12,12 +12,14 @@ public class InlineResizeTests
         output = new AnsiOutput (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return accept?.Invoke () ?? true; }, AppModel.Inline);
         output.SetSize (90, 25);
         ISizeMonitor sizeMonitor = Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true);
-        ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: sizeMonitor), time ?? new VirtualTimeProvider ())
+        VirtualTimeProvider clock = time ?? new ();
+        ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: sizeMonitor), clock)
         {
             AppModel = AppModel.Inline,
             ForceInlinePosition = new Point (0, 15)
         };
         app.Init ();
+        ((DriverImpl)app.Driver!).AnsiRequestScheduler.Now = () => clock.Now;
         return app;
     }
 
@@ -39,6 +41,7 @@ public class InlineResizeTests
 
         app.Driver!.SetScreenSize (50, 20);
         app.LayoutAndDraw (true);
+        app.Driver.Refresh ();
         output.SetCursor (new Cursor { Position = Point.Empty });
 
         Assert.Equal ("\u001b[6n", bytes.ToString ());
@@ -79,7 +82,10 @@ public class InlineResizeTests
 
         Assert.Equal (expectedOrigin, app.Screen.Y);
         Assert.Equal (50, app.Screen.Width);
-        Assert.DoesNotContain ("\n", bytes.ToString ());
+        if (response != "\u001b[20;1R")
+        {
+            Assert.DoesNotContain ("\n", bytes.ToString ());
+        }
         app.End (owner);
     }
 
@@ -253,6 +259,293 @@ public class InlineResizeTests
         app.LayoutAndDraw ();
         Assert.Contains ("ready", bytes.ToString ());
         app.End (owner);
+    }
+
+    [Fact]
+    public void RedrawBeforeResize_UsesPhysicalFrameRowInsteadOfHiddenCaretCache ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
+        app.LayoutAndDraw (true);
+        Assert.Null (output.GetCursor ().Position);
+        Assert.Equal (17, output.InlineCursorRow);
+
+        app.Driver!.SetScreenSize (50, 25);
+        Reply (app, "\u001b[18;1R");
+        app.LayoutAndDraw ();
+
+        Assert.Equal (15, app.Screen.Y);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void SecondResizeAfterThrowingNotification_UsesRecoveredPhysicalOrigin ()
+    {
+        VirtualTimeProvider time = new ();
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
+        app.Driver!.SetScreenSize (50, 20);
+        Reply (app, "\u001b[10;1R");
+        EventHandler<EventArgs<Rectangle>> throwing = (_, _) => throw new InvalidOperationException ("subscriber");
+        app.ScreenChanged += throwing;
+        Assert.Throws<InvalidOperationException> (() => app.LayoutAndDraw ());
+        app.ScreenChanged -= throwing;
+        Assert.Equal (8, app.Screen.Y);
+        Assert.Equal (8, output.InlineCursorRow);
+        Assert.Equal (1, output.GetCursor ().Position!.Value.Y);
+        time.Advance (TimeSpan.FromMilliseconds (200));
+        bytes.Clear ();
+
+        app.Driver.SetScreenSize (40, 18);
+        Reply (app, "\u001b[9;1R");
+        app.LayoutAndDraw ();
+
+        Assert.Equal (8, app.Screen.Y);
+        Assert.DoesNotContain ("[8;1H", bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Theory]
+    [InlineData (0)]
+    [InlineData (1)]
+    [InlineData (2)]
+    public void DelayedReplyAfterAbandonmentOrTimeout_NeverStartsReplacementRecovery (int failure)
+    {
+        VirtualTimeProvider time = new ();
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (40, 18);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+        if (failure == 0)
+        {
+            time.Advance (TimeSpan.FromSeconds (3));
+        }
+        else if (failure == 1)
+        {
+            ((DriverImpl)app.Driver).GetInputProcessor ().GetParser ().StopExpecting ("R", null, false);
+        }
+        else
+        {
+            time.Advance (TimeSpan.FromMilliseconds (1100));
+            ((DriverImpl)app.Driver).AnsiRequestScheduler.RunSchedule (app.Driver, force: true);
+            Assert.True (((DriverImpl)app.Driver).AnsiRequestScheduler.HasAbandonedCursorPositionRequest);
+        }
+        // A further resize must not clear the failure before it has been processed.
+        app.Driver.SetScreenSize (60, 22);
+        app.LayoutAndDraw ();
+        Reply (app, "\u001b[10;1R");
+        app.LayoutAndDraw ();
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
+        Assert.Empty (bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Fact]
+    public void ExistingCursorRequest_IsConsumedBeforeResizeRequestIsSent ()
+    {
+        VirtualTimeProvider time = new ();
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        bool received = false;
+        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest
+        {
+            Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => received = true
+        });
+        bytes.Clear ();
+        app.Driver.SetScreenSize (50, 20);
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        Reply (app, "\u001b[18;1R");
+        Assert.True (received);
+        time.Advance (TimeSpan.FromMilliseconds (200));
+        app.LayoutAndDraw ();
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Reply (app, "\u001b[18;1R");
+        app.LayoutAndDraw ();
+        Assert.Equal (15, app.Screen.Y);
+        Assert.Equal (50, app.Screen.Width);
+        Assert.True (output.IsInlinePlacementKnown);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void InvalidReplyAfterRevisionChange_IsNotRetried ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (40, 18);
+        Reply (app, "\u001b[0;1R");
+        app.Driver.SetScreenSize (60, 22);
+        bytes.Clear ();
+        app.LayoutAndDraw ();
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Empty (bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Fact]
+    public void AbandonedEarlierCursorRequest_CannotDonateLateReplyToResize ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest { Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => { } });
+        ((DriverImpl)app.Driver).GetInputProcessor ().GetParser ().StopExpecting ("R", null, false);
+        bytes.Clear ();
+
+        app.Driver.SetScreenSize (50, 20);
+        Reply (app, "\u001b[10;1R");
+        app.LayoutAndDraw ();
+
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Empty (bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Theory]
+    [InlineData (0, 20)]
+    [InlineData (50, 0)]
+    [InlineData (0, 0)]
+    public void HeadlessZeroSize_RetainsOriginUntilPositiveDimensionsReturn (int width, int height)
+    {
+        using IApplication app = Application.Create ();
+        app.AppModel = AppModel.Inline;
+        app.ForceInlinePosition = new Point (0, 15);
+        app.Init (DriverRegistry.Names.ANSI);
+        app.Screen = new Rectangle (0, 15, 90, 3);
+        app.Driver!.SetScreenSize (width, height);
+        app.LayoutAndDraw ();
+        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
+
+        app.Driver.SetScreenSize (50, 20);
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, 15, 50, 3), app.Screen);
+        Assert.Equal (new Point (0, 15), app.Driver.InlinePosition);
+    }
+
+    [Fact]
+    public void NativeResizeBetweenPollAndCaretUpdate_SuppressesStaleWrites ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        int? physical = output.InlineCursorRow;
+        Size nativeSize = new (90, 25);
+        output.NativeSizeQuery = () => nativeSize;
+        nativeSize = new Size (50, 20);
+        bytes.Clear ();
+
+        output.SetCursor (new Cursor { Position = Point.Empty, Style = CursorStyle.SteadyBar });
+        app.Driver!.Refresh ();
+
+        Assert.Empty (bytes.ToString ());
+        Assert.Equal (physical, output.InlineCursorRow);
+        app.Driver.SetScreenSize (50, 20);
+        Reply (app, "\u001b[18;1R");
+        app.LayoutAndDraw ();
+        Assert.Equal (15, app.Screen.Y);
+        Assert.Equal (50, app.Screen.Width);
+        Assert.True (output.IsInlinePlacementKnown);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void PartialWidthResize_DoesNotEraseUnownedColumns ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Screen = new Rectangle (0, 15, 40, 3);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (50, 20);
+        app.LayoutAndDraw ();
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Empty (bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Fact]
+    public void FailedFrameBeforeResize_DoesNotTrustCachedCaretOrPartiallyWrittenPosition ()
+    {
+        bool accept = true;
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, accept: () => accept);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
+        accept = false;
+        app.LayoutAndDraw (true);
+        accept = true;
+        Assert.Null (output.InlineCursorRow);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (50, 20);
+        app.LayoutAndDraw ();
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Empty (bytes.ToString ());
+        app.End (owner);
+    }
+
+    [Fact]
+    public void ResizeInDrawingCallback_StopsStaleFrameBeforeDriverRefresh ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        composer.DrawingContent += Resize;
+        bytes.Clear ();
+
+        app.LayoutAndDraw (true);
+
+        Assert.True (output.IsInlineResizePending);
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        app.End (owner);
+
+        void Resize (object? _, DrawEventArgs __)
+        {
+            composer.DrawingContent -= Resize;
+            app.Driver!.SetScreenSize (50, 20);
+        }
     }
 
     [Fact]

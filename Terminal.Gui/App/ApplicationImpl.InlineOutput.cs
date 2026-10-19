@@ -263,6 +263,10 @@ internal partial class ApplicationImpl
             Driver?.WriteRaw (text);
             return true;
         }
+        if (output is AnsiOutput ansiOutput)
+        {
+            ansiOutput.InlineCursorRow = null;
+        }
         if (driver.TryWriteRaw (text))
         {
             return true;

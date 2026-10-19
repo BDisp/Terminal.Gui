@@ -14,12 +14,23 @@ internal partial class ApplicationImpl
         }
         if (currentDriver is not DriverImpl driver || driver.GetOutput () is not AnsiOutput { IsInlineOutputAvailable: true } output)
         {
+            if (size.Width <= 0 || size.Height <= 0)
+            {
+                return;
+            }
             // Headless/custom drivers have no physical cursor to recover. Preserve their known origin.
             int height = Math.Min (region.Height, Math.Max (0, size.Height));
             int origin = Math.Clamp (region.Y, 0, Math.Max (0, size.Height - height));
             currentDriver.InlinePosition = new Point (0, origin);
-            Screen = new Rectangle (0, origin, Math.Max (0, size.Width), height);
+            _screen = new Rectangle (0, origin, Math.Max (0, size.Width), height);
+            _inlineScreenHasValidOwnership = true;
+            (currentDriver as DriverImpl)?.ResizeOutputBuffer (size.Width, height);
             currentDriver.ClearContents ();
+            foreach (View runnable in SessionStack?.Select (token => token.Runnable).OfType<View> () ?? [])
+            {
+                runnable.SetNeedsDraw ();
+            }
+            RaiseScreenChangedEvent (Screen);
             return;
         }
         if (_inlineResize is { } pending)
@@ -31,7 +42,10 @@ internal partial class ApplicationImpl
             pending.Size = size;
             pending.Revision++;
             pending.Row = null;
-            pending.Failed = false;
+            if (!pending.QueryPending)
+            {
+                pending.Started = null;
+            }
             return;
         }
 
@@ -39,12 +53,14 @@ internal partial class ApplicationImpl
         {
             Region = region,
             Size = size,
-            CursorOffset = Math.Clamp (driver.GetCursor ().Position?.Y ?? 0, 0, Math.Max (0, region.Height - 1)),
-            Generation = _inlineOutputGeneration
+            CursorOffset = output.InlineCursorRow.GetValueOrDefault () - region.Y,
+            Generation = _inlineOutputGeneration,
+            Failed = !_inlineScreenHasValidOwnership || output.InlineCursorRow is null || output.InlineCursorRow < region.Y
+                     || output.InlineCursorRow >= region.Y + Math.Max (1, region.Height)
         };
         _inlineResize = resize;
         output.IsInlineResizePending = true;
-        if (size.Width > 0 && size.Height > 0)
+        if (!resize.Failed && size.Width > 0 && size.Height > 0)
         {
             QueryInlineResizeCursor (resize, driver);
         }
@@ -52,46 +68,63 @@ internal partial class ApplicationImpl
 
     private void QueryInlineResizeCursor (InlineResize resize, DriverImpl driver)
     {
+        if (resize.Failed || driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
+        {
+            resize.Failed = true;
+            return;
+        }
         Size size = resize.Size;
         int revision = resize.Revision;
-        int query = ++resize.Query;
-        resize.QueryRevision = revision;
+        resize.Started ??= _timeProvider.Now;
+        if (driver.GetInputProcessor ().GetParser ().IsExpecting ("R", null))
+        {
+            return;
+        }
         resize.QueryPending = true;
-        resize.Started = _timeProvider.Now;
-        driver.QueueAnsiRequest (new AnsiEscapeSequenceRequest
+        bool sent = driver.AnsiRequestScheduler.TrySendImmediately (driver, new AnsiEscapeSequenceRequest
         {
             Request = EscSeqUtils.CSI_RequestCursorPositionReport.Request,
             Terminator = EscSeqUtils.CSI_RequestCursorPositionReport.Terminator,
             ResponseReceived = response =>
             {
-                if (!ReferenceEquals (_inlineResize, resize) || resize.Query != query)
+                if (!ReferenceEquals (_inlineResize, resize))
                 {
                     return;
                 }
                 resize.QueryPending = false;
-                if (resize.Revision != revision)
+                if (driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
                 {
+                    resize.Failed = true;
                     return;
                 }
                 Match match = Regex.Match (response ?? string.Empty, @"^\x1b\[\??(\d+);(\d+)R$");
-                if (match.Success && int.TryParse (match.Groups [1].Value, out int row) && row > 0 && row <= size.Height
-                    && int.TryParse (match.Groups [2].Value, out int column) && column > 0 && column <= size.Width)
+                if (!match.Success || !int.TryParse (match.Groups [1].Value, out int row) || row <= 0 || row > size.Height
+                    || !int.TryParse (match.Groups [2].Value, out int column) || column <= 0 || column > size.Width)
                 {
-                    resize.Row = row - 1;
+                    resize.Failed = true;
                     return;
                 }
-                resize.Failed = true;
+                if (resize.Revision != revision)
+                {
+                    resize.Started = null;
+                    return;
+                }
+                resize.Row = row - 1;
             },
             Abandoned = () =>
             {
-                if (!ReferenceEquals (_inlineResize, resize) || resize.Query != query)
+                if (!ReferenceEquals (_inlineResize, resize))
                 {
                     return;
                 }
                 resize.QueryPending = false;
-                resize.Failed = resize.Revision == revision;
+                resize.Failed = true;
             }
         });
+        if (!sent)
+        {
+            resize.QueryPending = false;
+        }
     }
 
     // Called after size polling, before layout/printing. CPR callbacks only record a position:
@@ -102,22 +135,15 @@ internal partial class ApplicationImpl
         {
             return true;
         }
-        if (resize.Size.Width <= 0 || resize.Size.Height <= 0)
-        {
-            return false;
-        }
         if (!Initialized || _dispatchStopping || resize.Generation != _inlineOutputGeneration)
         {
             return false;
         }
-        bool timedOut = resize.QueryPending && _timeProvider.Now - resize.Started > TimeSpan.FromSeconds (2);
-        if (timedOut && resize.QueryRevision != resize.Revision)
+        bool timedOut = resize.Row is null && resize.Started is { } started && _timeProvider.Now - started > TimeSpan.FromSeconds (2);
+        if (resize.Failed || timedOut || driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
         {
-            QueryInlineResizeCursor (resize, driver);
-            return false;
-        }
-        if (resize.Failed || timedOut)
-        {
+            // CPR has no request id: a late reply must never be accepted by a replacement query.
+            resize.Failed = true;
             if (driver.GetOutput () is IInlineOutput output)
             {
                 output.LoseInlinePlacement ();
@@ -129,6 +155,10 @@ internal partial class ApplicationImpl
             EndInlineOutput (fault: true);
             return false;
         }
+        if (resize.Size.Width <= 0 || resize.Size.Height <= 0)
+        {
+            return false;
+        }
         if (resize.Row is not { } row)
         {
             if (!resize.QueryPending)
@@ -138,11 +168,11 @@ internal partial class ApplicationImpl
             return false;
         }
 
-        // Reserve the old height before re-layout. A terminal can clamp a stale caret to its
-        // last row while shrinking; truncating the reservation there and growing it again
-        // would scroll the still-visible old frame into history.
-        int height = Math.Min (resize.Region.Height, resize.Size.Height);
-        int origin = Math.Clamp (row - resize.CursorOffset, 0, resize.Size.Height - height);
+        // Never move ownership upward to fit the old height. Erase surviving rows first;
+        // ordinary growth can then scroll the cleared region to reserve any missing height.
+        int recoveredOrigin = row - resize.CursorOffset;
+        int origin = Math.Max (0, recoveredOrigin);
+        int height = Math.Min (Math.Max (0, resize.Region.Height + Math.Min (0, recoveredOrigin)), resize.Size.Height - origin);
         StringBuilder erase = new (EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes);
         for (int ownedRow = origin; ownedRow < origin + height; ownedRow++)
         {
@@ -158,10 +188,12 @@ internal partial class ApplicationImpl
         _inlineResize = null;
         if (driver.GetOutput () is AnsiOutput ansiOutput)
         {
+            ansiOutput.InlineCursorRow = origin;
             ansiOutput.IsInlineResizePending = false;
             ansiOutput.ResetInlineTextState ();
         }
         _screen = new Rectangle (0, origin, resize.Size.Width, height);
+        _inlineScreenHasValidOwnership = true;
         driver.InlinePosition = new Point (0, origin);
         driver.ResizeOutputBuffer (resize.Size.Width, height);
         _inlineScreenSized = height > 0;
@@ -186,12 +218,10 @@ internal partial class ApplicationImpl
         internal Size Size { get; set; }
         internal int CursorOffset { get; init; }
         internal long Generation { get; init; }
-        internal DateTime Started { get; set; }
+        internal DateTime? Started { get; set; }
         internal int? Row { get; set; }
         internal bool QueryPending { get; set; }
         internal bool Failed { get; set; }
         internal int Revision { get; set; }
-        internal int Query { get; set; }
-        internal int QueryRevision { get; set; }
     }
 }

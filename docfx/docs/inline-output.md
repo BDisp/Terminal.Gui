@@ -170,16 +170,22 @@ for applications that do not use this API.
 ## Terminal resize
 
 The built-in ANSI driver queries the terminal cursor after a resize and recovers the live
-origin using the cursor's previous relative row. It erases and repaints the recovered live
+origin using the last successfully written physical cursor row, independently of the caret
+cache. It erases only surviving live rows before reserving any missing height through
+controlled scrolling, then repaints the recovered live
 rows at the new width without a display/scrollback clear or replaying completed messages.
 Layout, printing, and cursor updates wait for recovery; input and dispatch remain available.
 Repeated size changes discard replies for earlier sizes. Zero-size terminals defer recovery
 until positive dimensions return. Headless/custom drivers retain their known origin, clamped
 to fit the new terminal.
 
-A missing or invalid cursor reply, or a failed physical erase, makes placement uncertain.
+A missing, abandoned, or invalid cursor reply, a partial-width/invalid old reservation,
+an unknown physical cursor, or a failed physical erase makes placement uncertain.
 Pending printing faults and further live placement stops under the same failure policy as
-insertion. To recover, stop and create a fresh initialized application.
+insertion. Failure cannot be reset by another size change. Cursor-position reports have no
+request identifiers, so an abandoned request (including an earlier startup query) cannot
+be retried safely during the same output lifetime. To recover, stop and create a fresh
+initialized application.
 
 The terminal owns resize reflow and history retention. It may move already displayed cells,
 including parts of an old live frame, into history during the resize itself; the renderer
