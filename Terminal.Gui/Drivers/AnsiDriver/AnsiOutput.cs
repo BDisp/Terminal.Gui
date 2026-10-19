@@ -446,10 +446,11 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         set
         {
             _inlineCursorRow = value;
-            if (value is not null)
+            if (value is null)
             {
-                InlineCursorSize = _consoleSize;
+                return;
             }
+            InlineCursorSize = _consoleSize;
         }
     }
 

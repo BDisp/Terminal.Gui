@@ -168,7 +168,7 @@ public class ApplicationInlineOutputTests
     public void InvalidGeometryFaultsBeforeInsertionAndResizeUsesExecutionWidth ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out _, sizeMonitor: Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true));
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, sizeMonitor: Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true));
         using Runnable view = new () { Width = Dim.Fill (), Height = 2 };
         SessionToken owner = app.Begin (view)!;
         app.LayoutAndDraw ();
@@ -178,14 +178,16 @@ public class ApplicationInlineOutputTests
         app.LayoutAndDraw ();
         Assert.True (invalid.IsFaulted);
         Assert.DoesNotContain ("invalid", bytes.ToString ());
-        app.Screen = new Rectangle (0, 0, 12, 2);
+        // Keep the success case away from a cursor-clamping boundary.
+        app.Screen = new Rectangle (0, 1, 12, 2);
+        output.SetCursor (new Cursor { Position = Point.Empty });
         Task print = app.PrintAboveAsync ("abcdefgh", TestContext.Current.CancellationToken);
         app.Driver!.SetScreenSize (4, 6);
         ((AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ())
-            .ProcessInput ("\u001b[1;1R".Select (character => Tuple.Create (character, character)).ToArray ());
+            .ProcessInput ("\u001b[2;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         Assert.True (print.IsCompletedSuccessfully);
-        Assert.Equal (2, app.Screen.Y);
+        Assert.Equal (3, app.Screen.Y);
         Assert.Equal (4, app.Screen.Width);
         app.End (owner);
     }
@@ -405,6 +407,7 @@ public class ApplicationInlineOutputTests
     public void ZeroTerminalSizeDefersAndRestoredSizeResumes ()
     {
         using ApplicationImpl app = Create (new StringBuilder (), out _, sizeMonitor: Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true));
+        app.ForceInlinePosition = new Point (0, 1);
         using Runnable view = new () { Height = 2 };
         SessionToken owner = app.Begin (view)!;
         app.LayoutAndDraw ();
@@ -415,7 +418,7 @@ public class ApplicationInlineOutputTests
         app.Driver.SetScreenSize (12, 6);
         app.LayoutAndDraw ();
         ((AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ())
-            .ProcessInput ("\u001b[1;1R".Select (character => Tuple.Create (character, character)).ToArray ());
+            .ProcessInput ("\u001b[2;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         Assert.True (print.IsCompletedSuccessfully);
         app.End (owner);
