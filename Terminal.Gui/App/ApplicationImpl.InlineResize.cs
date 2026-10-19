@@ -35,6 +35,7 @@ internal partial class ApplicationImpl
         }
         if (_inlineResize is { } pending)
         {
+            pending.ObserveSize (size);
             if (pending.Size == size)
             {
                 return;
@@ -54,10 +55,14 @@ internal partial class ApplicationImpl
             Region = region,
             Size = size,
             CursorOffset = output.InlineCursorRow.GetValueOrDefault () - region.Y,
+            ObservedSize = output.InlineCursorSize,
+            MinimumCursorRow = output.InlineCursorRow.GetValueOrDefault (),
+            MaximumCursorRow = output.InlineCursorRow.GetValueOrDefault (),
             Generation = _inlineOutputGeneration,
             Failed = !_inlineScreenHasValidOwnership || output.InlineCursorRow is null || output.InlineCursorRow < region.Y
                      || output.InlineCursorRow >= region.Y + Math.Max (1, region.Height)
         };
+        resize.ObserveSize (size);
         _inlineResize = resize;
         output.IsInlineResizePending = true;
         if (!resize.Failed && size.Width > 0 && size.Height > 0)
@@ -104,8 +109,15 @@ internal partial class ApplicationImpl
                     resize.Failed = true;
                     return;
                 }
-                if (resize.Revision != revision
-                    || driver.GetOutput () is AnsiOutput output && output.HasPendingInlineSizeChange (size))
+                // A top-edge report cannot establish how much of the live reservation survived.
+                // Keep this evidence even if the query has already been superseded.
+                if (row == 1)
+                {
+                    resize.Failed = true;
+                    return;
+                }
+                bool nativeChanged = driver.GetOutput () is AnsiOutput output && ObserveNativeInlineResizeSize (resize, output);
+                if (resize.Revision != revision || nativeChanged)
                 {
                     resize.Started = null;
                     return;
@@ -135,6 +147,16 @@ internal partial class ApplicationImpl
         }
     }
 
+    private static bool ObserveNativeInlineResizeSize (InlineResize resize, AnsiOutput output)
+    {
+        if (output.NativeSizeQuery?.Invoke () is not { } size)
+        {
+            return false;
+        }
+        resize.ObserveSize (size);
+        return resize.Failed || size != resize.Size;
+    }
+
     // Called after size polling, before layout/printing. CPR callbacks only record a position:
     // user callbacks and a second physical resize must not publish stale geometry mid-input dispatch.
     private bool CompleteInlineResize ()
@@ -147,6 +169,7 @@ internal partial class ApplicationImpl
         {
             return false;
         }
+        bool nativeChanged = driver.GetOutput () is AnsiOutput currentOutput && ObserveNativeInlineResizeSize (resize, currentOutput);
         bool timedOut = resize.Row is null && resize.Started is { } started && _timeProvider.Now - started > TimeSpan.FromSeconds (2);
         if (resize.Failed || timedOut || driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
         {
@@ -167,7 +190,7 @@ internal partial class ApplicationImpl
         {
             return false;
         }
-        if (driver.GetOutput () is AnsiOutput currentOutput && currentOutput.HasPendingInlineSizeChange (resize.Size))
+        if (nativeChanged)
         {
             return false;
         }
@@ -235,5 +258,25 @@ internal partial class ApplicationImpl
         internal bool QueryPending { get; set; }
         internal bool Failed { get; set; }
         internal int Revision { get; set; }
+        internal Size ObservedSize { get; set; }
+        internal int MinimumCursorRow { get; set; }
+        internal int MaximumCursorRow { get; set; }
+        internal bool MayHaveClamped { get; set; }
+
+        internal void ObserveSize (Size size)
+        {
+            if (size.Width <= 0 || size.Height <= 0 || size == ObservedSize)
+            {
+                return;
+            }
+            // Once a resize could have clamped the cursor, a later resize can move it back
+            // into the interior. A new CPR then cannot prove ownership was preserved.
+            Failed |= MayHaveClamped || ObservedSize.Height <= 0;
+            int removed = Math.Max (0, ObservedSize.Height - size.Height);
+            MayHaveClamped |= MinimumCursorRow <= removed || MaximumCursorRow >= size.Height;
+            MinimumCursorRow = Math.Max (0, MinimumCursorRow - removed);
+            MaximumCursorRow = Math.Min (size.Height - 1, MaximumCursorRow + Math.Max (0, size.Height - ObservedSize.Height));
+            ObservedSize = size;
+        }
     }
 }

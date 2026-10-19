@@ -440,7 +440,20 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 
     private int? _inlineCursorRow;
     // Absolute physical row, committed only after a successful CUP/frame write.
-    internal int? InlineCursorRow { get => HasPendingOutputRecovery ? null : _inlineCursorRow; set => _inlineCursorRow = value; }
+    internal int? InlineCursorRow
+    {
+        get => HasPendingOutputRecovery ? null : _inlineCursorRow;
+        set
+        {
+            _inlineCursorRow = value;
+            if (value is not null)
+            {
+                InlineCursorSize = _consoleSize;
+            }
+        }
+    }
+
+    internal Size InlineCursorSize { get; private set; }
     private int? _stagedInlineCursorRow;
 
     // Keep the physical cursor fixed while an inline resize CPR is outstanding.

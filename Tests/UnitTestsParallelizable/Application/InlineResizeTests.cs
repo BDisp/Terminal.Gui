@@ -116,6 +116,7 @@ public class InlineResizeTests
     [Theory]
     [InlineData (null)]
     [InlineData ("\u001b[0;1R")]
+    [InlineData ("\u001b[1;1R")]
     [InlineData ("\u001b[20;1R")]
     [InlineData ("\u001b[21;1R")]
     [InlineData ("\u001b[10;51R")]
@@ -593,6 +594,36 @@ public class InlineResizeTests
         Reply (app, "\u001b[18;1R");
         app.LayoutAndDraw ();
         Assert.True (pending.IsCompletedSuccessfully);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void NativeClampObservedImmediatelyBeforeErase_RemainsUnsafeAfterReturningToPolledSize ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.SetScreenSize (50, 20);
+        Reply (app, "\u001b[10;1R");
+        int queries = 0;
+        output.NativeSizeQuery = () => ++queries == 1 ? new Size (50, 20) : new Size (50, 3);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        Assert.False (pending.IsCompleted);
+        Assert.True (output.IsInlineResizePending);
+
+        // No size event is delivered: the terminal returns to the dimensions already polled.
+        output.NativeSizeQuery = () => new Size (50, 20);
+        app.LayoutAndDraw ();
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
+        Assert.Empty (bytes.ToString ());
         app.End (owner);
     }
 

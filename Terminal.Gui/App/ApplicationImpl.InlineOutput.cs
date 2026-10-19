@@ -269,7 +269,9 @@ internal partial class ApplicationImpl
         }
         if (output is AnsiOutput ansiOutput)
         {
-            if (ansiOutput.HasPendingInlineSizeChange (expectedSize ?? driver.Screen.Size))
+            if (_inlineResize is { } resize
+                    ? ObserveNativeInlineResizeSize (resize, ansiOutput)
+                    : ansiOutput.HasPendingInlineSizeChange (expectedSize ?? driver.Screen.Size))
             {
                 return false;
             }

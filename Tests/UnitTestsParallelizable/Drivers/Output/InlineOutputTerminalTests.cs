@@ -358,6 +358,141 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (0, false, true, 18)]
+    [InlineData (0, true, true, 18)]
+    [InlineData (1, false, true, 18)]
+    [InlineData (2, false, true, 18)]
+    [InlineData (0, false, false, 18)]
+    [InlineData (1, false, false, 18)]
+    [InlineData (2, false, false, 18)]
+    [InlineData (1, false, true, 12)]
+    [InlineData (2, false, true, 12)]
+    public void ShrinkThenEnlarge_NeverForgetsPossibleClamping (int observation, bool replyBeforeEnlarge, bool clipBottom, int finalHeight)
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO\u001b[10;1HUNOWNED0\u001b[11;1HUNOWNED1\u001b[12;1HUNOWNED2");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        VirtualTimeProvider time = new ();
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor), time)
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 3)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE0\nLIVE1\nLIVE2\nLIVE3\nLIVE4\nLIVE5" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+        Assert.Equal (3, terminal.CursorRow);
+        bytes.Clear ();
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver!).GetInputProcessor ().GetParser ();
+        ((DriverImpl)app.Driver).AnsiRequestScheduler.Now = () => time.Now;
+        if (observation != 0)
+        {
+            app.Driver.SetScreenSize (20, 12);
+        }
+        int smallHeight = clipBottom ? 3 : 4;
+        terminal.Resize (20, smallHeight, clipBottom: clipBottom);
+        string response = $"\u001b[{terminal.CursorRow + 1};1R";
+        Size nativeSize = new (20, smallHeight);
+        if (observation == 0)
+        {
+            app.Driver.SetScreenSize (20, smallHeight);
+        }
+        else
+        {
+            output.NativeSizeQuery = () => nativeSize;
+        }
+        if (replyBeforeEnlarge || observation == 2)
+        {
+            parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        }
+        if (observation == 1)
+        {
+            app.LayoutAndDraw ();
+        }
+        terminal.Resize (20, finalHeight, restoreHistory: !clipBottom);
+        nativeSize = new Size (20, finalHeight);
+        string [] surviving = [.. terminal.Rows.Select (row => new string (row))];
+        Assert.Equal ("SHELL TWO", surviving [2].TrimEnd ());
+        if (!clipBottom)
+        {
+            Assert.Equal ("UNOWNED0", surviving [9].TrimEnd ());
+        }
+        if (finalHeight != 12)
+        {
+            app.Driver.SetScreenSize (20, finalHeight);
+        }
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        if (!replyBeforeEnlarge && observation != 2)
+        {
+            parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        }
+        time.Advance (TimeSpan.FromMilliseconds (200));
+        app.LayoutAndDraw ();
+        string replacement = $"\u001b[{terminal.CursorRow + 1};1R";
+        parser.ProcessInput (replacement.Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
+        Assert.Empty (terminal.History);
+        app.End (owner);
+    }
+
+    // CoPilot - GPT-6
+    [Theory]
+    [InlineData (0)]
+    [InlineData (1)]
+    public void TopClippingResize_ClampedCursorNeverErasesUnownedRowsBelow (int cursorOffset)
+    {
+        Grid terminal = new (30, 12);
+        terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO\u001b[10;1HUNOWNED0\u001b[11;1HUNOWNED1\u001b[12;1HUNOWNED2");
+        StringBuilder bytes = new ();
+        AnsiOutput output = new (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return true; }, AppModel.Inline);
+        output.SetSize (30, 12);
+        ISizeMonitor monitor = Mock.Of<ISizeMonitor> (size => size.InitialSizeReceived == true);
+        using ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: monitor))
+        {
+            AppModel = AppModel.Inline,
+            ForceInlinePosition = new Point (0, 3)
+        };
+        app.Init ();
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6, Text = "LIVE0\nLIVE1\nLIVE2\nLIVE3\nLIVE4\nLIVE5" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, cursorOffset), Style = CursorStyle.SteadyBar });
+        terminal.Feed (bytes.ToString ());
+        bytes.Clear ();
+        terminal.Resize (20, 4);
+        string [] surviving = [.. terminal.Rows.Select (row => new string (row).TrimEnd ())];
+        string [] history = [.. terminal.History];
+        Assert.Equal (["LIVE5", "UNOWNED0", "UNOWNED1", "UNOWNED2"], surviving);
+
+        app.Driver!.SetScreenSize (20, 4);
+        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
+        string response = $"\u001b[{terminal.CursorRow + 1};1R";
+        parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
+        app.LayoutAndDraw ();
+        terminal.Feed (bytes.ToString ());
+
+        Assert.True (pending.IsFaulted);
+        Assert.False (output.IsInlinePlacementKnown);
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row).TrimEnd ()));
+        Assert.Equal (history, terminal.History);
+        app.End (owner);
+    }
+
     // Minimal VT state model for the emitted subset, including delayed autowrap and actual scroll history.
     private sealed class Grid
     {
@@ -371,7 +506,7 @@ public class InlineOutputTerminalTests
 
         internal int CursorRow => _row;
 
-        internal void Resize (int width, int height, bool clipBottom = false)
+        internal void Resize (int width, int height, bool clipBottom = false, bool restoreHistory = false)
         {
             int removed = Math.Max (0, _height - height);
             for (var index = 0; index < removed; index++)
@@ -384,11 +519,22 @@ public class InlineOutputTerminalTests
                 History.Add (new string (Rows [0]).TrimEnd ());
                 Rows.RemoveAt (0);
             }
+            if (restoreHistory && height > _height)
+            {
+                int restored = Math.Min (height - _height, History.Count);
+                Rows.InsertRange (0, History.TakeLast (restored).Select (row => row.PadRight (_width).ToCharArray ()));
+                History.RemoveRange (History.Count - restored, restored);
+                _row += restored;
+            }
             for (var index = 0; index < Rows.Count; index++)
             {
                 char [] resized = new string (' ', width).ToCharArray ();
                 Array.Copy (Rows [index], resized, Math.Min (_width, width));
                 Rows [index] = resized;
+            }
+            while (Rows.Count < height)
+            {
+                Rows.Add (new string (' ', width).ToCharArray ());
             }
             _row = Math.Clamp (_row - (clipBottom ? 0 : removed), 0, height - 1);
             _column = Math.Min (_column, width - 1);
