@@ -241,11 +241,7 @@ internal partial class ApplicationImpl
 
                 if (overflow > 0)
                 {
-                    if (!WriteInlineMovement (new string ('\n', overflow)))
-                    {
-                        return;
-                    }
-                    if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{overflow}A"))
+                    if (!WriteInlineMovement (new string ('\n', overflow) + $"{EscSeqUtils.CSI}{overflow}A"))
                     {
                         return;
                     }
@@ -306,11 +302,8 @@ internal partial class ApplicationImpl
                 // its new rows are already available below the origin and need no cursor movement.
                 if (canGrowDown > 0 && Screen.Height > 0)
                 {
-                    if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (bottomEdge, 1) + new string ('\n', canGrowDown)))
-                    {
-                        return;
-                    }
-                    if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{canGrowDown}A"))
+                    if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (bottomEdge, 1) + new string ('\n', canGrowDown)
+                                              + $"{EscSeqUtils.CSI}{canGrowDown}A"))
                     {
                         return;
                     }
@@ -326,11 +319,8 @@ internal partial class ApplicationImpl
 
                     if (canScrollUp > 0)
                     {
-                        if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (termHeight, 1) + new string ('\n', canScrollUp)))
-                        {
-                            return;
-                        }
-                        if (!WriteInlineMovement ($"{EscSeqUtils.CSI}{canScrollUp}A"))
+                        if (!WriteInlineMovement (EscSeqUtils.CSI_SetCursorPosition (termHeight, 1) + new string ('\n', canScrollUp)
+                                                  + $"{EscSeqUtils.CSI}{canScrollUp}A"))
                         {
                             return;
                         }

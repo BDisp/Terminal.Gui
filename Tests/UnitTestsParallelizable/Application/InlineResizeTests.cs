@@ -39,7 +39,7 @@ public class InlineResizeTests
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
 
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         app.LayoutAndDraw (true);
         app.Driver.Refresh ();
         output.SetCursor (new Cursor { Position = Point.Empty });
@@ -53,7 +53,7 @@ public class InlineResizeTests
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (new Rectangle (0, 10, 50, 3), app.Screen);
+        Assert.Equal (new Rectangle (0, 10, 90, 3), app.Screen);
         Assert.Equal (new Point (0, 10), app.Driver.InlinePosition);
         Assert.False (output.IsInlineResizePending);
         Assert.DoesNotContain ("[2J", bytes.ToString ());
@@ -75,13 +75,13 @@ public class InlineResizeTests
         app.LayoutAndDraw ();
         output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
         bytes.Clear ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
 
         Reply (app, response);
         app.LayoutAndDraw ();
 
         Assert.Equal (expectedOrigin, app.Screen.Y);
-        Assert.Equal (50, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
         Assert.DoesNotContain ("\n", bytes.ToString ());
         app.End (owner);
     }
@@ -105,7 +105,7 @@ public class InlineResizeTests
         Assert.Empty (bytes.ToString ());
         Assert.False (pending.IsCompleted);
         Assert.True (output.IsInlinePlacementKnown);
-        app.Driver.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (90, 20);
         app.LayoutAndDraw ();
         Reply (app, "\u001b[10;1R");
         app.LayoutAndDraw ();
@@ -117,10 +117,11 @@ public class InlineResizeTests
     [InlineData (null)]
     [InlineData ("\u001b[0;1R")]
     [InlineData ("\u001b[1;1R")]
+    [InlineData ("\u001b[1;2R")]
     [InlineData ("\u001b[20;1R")]
     [InlineData ("\u001b[21;1R")]
-    [InlineData ("\u001b[10;51R")]
-    public void MissingOrInvalidPosition_FaultsPrintingWithoutErasingTranscript (string? response)
+    [InlineData ("\u001b[10;91R")]
+    public void MissingOrInvalidPosition_ReservesFreshRegionAndCompletesPrinting (string? response)
     {
         VirtualTimeProvider time = new ();
         StringBuilder bytes = new ();
@@ -128,8 +129,8 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        app.Driver!.SetScreenSize (90, 20);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
         if (response is { })
         {
@@ -140,28 +141,29 @@ public class InlineResizeTests
         app.LayoutAndDraw ();
         output.SetCursor (new Cursor ());
 
-        Assert.True (pending.IsFaulted);
-        Assert.IsType<IOException> (pending.Exception!.InnerException);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
     [Theory]
     [InlineData (false)]
     [InlineData (true)]
-    public void SecondResize_DiscardsResponseForPreviousSizeWithoutErasing (bool returnToFirstSize)
+    public void SecondResize_UsesFreshRegionRatherThanTrustingSupersededReport (bool returnToFirstSize)
     {
         StringBuilder bytes = new ();
         using ApplicationImpl app = Create (bytes, out _);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
-        app.Driver.SetScreenSize (40, 18);
+        app.Driver!.SetScreenSize (90, 20);
+        app.Driver.SetScreenSize (90, 18);
         if (returnToFirstSize)
         {
-            app.Driver.SetScreenSize (50, 20);
+            app.Driver.SetScreenSize (90, 20);
         }
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
@@ -169,11 +171,11 @@ public class InlineResizeTests
         Reply (app, "\u001b[10;1R");
         app.LayoutAndDraw ();
 
-        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        Assert.False (pending.IsCompleted);
-        Assert.DoesNotContain ("[2K", bytes.ToString ());
+        Assert.Equal (new Rectangle (0, 1, 90, 3), app.Screen);
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.Contains ("\n", bytes.ToString ());
         app.End (owner);
-        Assert.True (pending.IsCanceled);
+        Assert.True (pending.IsCompletedSuccessfully);
     }
 
     [Fact]
@@ -185,7 +187,7 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
         accept = false;
@@ -213,7 +215,7 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
         app.ScreenChanged += Stop;
@@ -244,7 +246,7 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "ready" };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         EventHandler<EventArgs<Rectangle>> throwing = (_, _) => throw new InvalidOperationException ("subscriber");
         app.ScreenChanged += throwing;
@@ -252,7 +254,7 @@ public class InlineResizeTests
         Assert.Throws<InvalidOperationException> (() => app.LayoutAndDraw ());
 
         app.ScreenChanged -= throwing;
-        Assert.Equal (50, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
         Assert.False (output.IsInlineResizePending);
         bytes.Clear ();
         app.LayoutAndDraw ();
@@ -273,7 +275,7 @@ public class InlineResizeTests
         Assert.Null (output.GetCursor ().Position);
         Assert.Equal (15, output.InlineCursorRow);
 
-        app.Driver!.SetScreenSize (50, 25);
+        app.Driver!.SetScreenSize (90, 26);
         Reply (app, "\u001b[16;1R");
         app.LayoutAndDraw ();
 
@@ -291,7 +293,7 @@ public class InlineResizeTests
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
         output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         EventHandler<EventArgs<Rectangle>> throwing = (_, _) => throw new InvalidOperationException ("subscriber");
         app.ScreenChanged += throwing;
@@ -303,7 +305,7 @@ public class InlineResizeTests
         time.Advance (TimeSpan.FromMilliseconds (200));
         bytes.Clear ();
 
-        app.Driver.SetScreenSize (40, 18);
+        app.Driver.SetScreenSize (90, 18);
         Reply (app, "\u001b[9;1R");
         app.LayoutAndDraw ();
 
@@ -316,7 +318,7 @@ public class InlineResizeTests
     [InlineData (0)]
     [InlineData (1)]
     [InlineData (2)]
-    public void DelayedReplyAfterAbandonmentOrTimeout_NeverStartsReplacementRecovery (int failure)
+    public void DelayedReplyAfterAbandonmentOrTimeout_UsesFreshRegionWithoutReplacementQuery (int failure)
     {
         VirtualTimeProvider time = new ();
         StringBuilder bytes = new ();
@@ -324,9 +326,9 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
-        app.Driver.SetScreenSize (40, 18);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        app.Driver!.SetScreenSize (90, 20);
+        app.Driver.SetScreenSize (90, 18);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
         if (failure == 0)
         {
@@ -343,15 +345,17 @@ public class InlineResizeTests
             Assert.True (((DriverImpl)app.Driver).AnsiRequestScheduler.HasAbandonedCursorPositionRequest);
         }
         // A further resize must not clear the failure before it has been processed.
-        app.Driver.SetScreenSize (60, 22);
+        app.Driver.SetScreenSize (90, 22);
         app.LayoutAndDraw ();
         Reply (app, "\u001b[10;1R");
         app.LayoutAndDraw ();
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Equal (1, app.Screen.Y);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -370,7 +374,7 @@ public class InlineResizeTests
             Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => received = true
         });
         bytes.Clear ();
-        app.Driver.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (90, 20);
         app.LayoutAndDraw ();
         Assert.Empty (bytes.ToString ());
         Reply (app, "\u001b[16;1R");
@@ -381,32 +385,34 @@ public class InlineResizeTests
         Reply (app, "\u001b[16;1R");
         app.LayoutAndDraw ();
         Assert.Equal (15, app.Screen.Y);
-        Assert.Equal (50, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
         Assert.True (output.IsInlinePlacementKnown);
         app.End (owner);
     }
 
     [Fact]
-    public void InvalidReplyAfterRevisionChange_IsNotRetried ()
+    public void InvalidReplyAfterRevisionChange_UsesFreshRegion ()
     {
         StringBuilder bytes = new ();
         using ApplicationImpl app = Create (bytes, out AnsiOutput output);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
-        app.Driver.SetScreenSize (40, 18);
+        app.Driver!.SetScreenSize (90, 20);
+        app.Driver.SetScreenSize (90, 18);
         Reply (app, "\u001b[0;1R");
-        app.Driver.SetScreenSize (60, 22);
+        app.Driver.SetScreenSize (90, 22);
         bytes.Clear ();
         app.LayoutAndDraw ();
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
     [Fact]
-    public void AbandonedEarlierCursorRequest_CannotDonateLateReplyToResize ()
+    public void AbandonedEarlierCursorRequest_UsesFreshRegionWithoutAcceptingLateReply ()
     {
         StringBuilder bytes = new ();
         using ApplicationImpl app = Create (bytes, out AnsiOutput output);
@@ -417,12 +423,14 @@ public class InlineResizeTests
         ((DriverImpl)app.Driver).GetInputProcessor ().GetParser ().StopExpecting ("R", null, false);
         bytes.Clear ();
 
-        app.Driver.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         app.LayoutAndDraw ();
 
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -459,7 +467,7 @@ public class InlineResizeTests
         int? physical = output.InlineCursorRow;
         Size nativeSize = new (90, 25);
         output.NativeSizeQuery = () => nativeSize;
-        nativeSize = new Size (50, 20);
+        nativeSize = new Size (90, 20);
         bytes.Clear ();
 
         output.SetCursor (new Cursor { Position = Point.Empty, Style = CursorStyle.SteadyBar });
@@ -467,11 +475,11 @@ public class InlineResizeTests
 
         Assert.Empty (bytes.ToString ());
         Assert.Equal (physical, output.InlineCursorRow);
-        app.Driver.SetScreenSize (50, 20);
+        app.Driver.SetScreenSize (90, 20);
         Reply (app, "\u001b[16;1R");
         app.LayoutAndDraw ();
         Assert.Equal (15, app.Screen.Y);
-        Assert.Equal (50, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
         Assert.True (output.IsInlinePlacementKnown);
         app.End (owner);
     }
@@ -479,7 +487,7 @@ public class InlineResizeTests
     [Theory]
     [InlineData (true)]
     [InlineData (false)]
-    public void SupersededReplyBeyondOldBounds_IsConsumedBeforeQueryingNewSize (bool polled)
+    public void SupersededReplyBeyondOldBounds_DefersUntilPollingThenUsesFreshRegion (bool polled)
     {
         VirtualTimeProvider time = new ();
         StringBuilder bytes = new ();
@@ -487,30 +495,31 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        output.NativeSizeQuery = () => new Size (100, 30);
+        output.NativeSizeQuery = () => new Size (90, 30);
         if (polled)
         {
-            app.Driver.SetScreenSize (100, 30);
+            app.Driver.SetScreenSize (90, 30);
         }
         bytes.Clear ();
         Reply (app, "\u001b[25;80R");
         app.LayoutAndDraw ();
-        Assert.False (pending.IsCompleted);
         Assert.True (output.IsInlinePlacementKnown);
-        Assert.DoesNotContain ("[2K", bytes.ToString ());
         if (!polled)
         {
+            Assert.False (pending.IsCompleted);
             Assert.Empty (bytes.ToString ());
-            app.Driver.SetScreenSize (100, 30);
+            app.Driver.SetScreenSize (90, 30);
         }
         time.Advance (TimeSpan.FromMilliseconds (200));
         app.LayoutAndDraw ();
         Reply (app, "\u001b[18;1R");
         app.LayoutAndDraw ();
         Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (100, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
+        Assert.Equal (1, app.Screen.Y);
+        Assert.DoesNotContain ("\u001b[6n", bytes.ToString ());
         app.End (owner);
     }
 
@@ -522,15 +531,15 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         app.Begin (composer);
         app.LayoutAndDraw ();
-        output.NativeSizeQuery = () => new Size (50, 10);
+        output.NativeSizeQuery = () => new Size (90, 10);
         bytes.Clear ();
 
         app.Dispose ();
 
         Assert.Contains ("\u001b[?2004l", bytes.ToString ());
         Assert.Contains ("\u001b[?25h", bytes.ToString ());
-        Assert.DoesNotMatch (@"\x1b\[\d+;\d+H", bytes.ToString ());
-        Assert.DoesNotContain ("\n", bytes.ToString ());
+        Assert.Contains ("\u001b[10;1H\n", bytes.ToString ());
+        Assert.DoesNotContain ("\u001b[18;1H", bytes.ToString ());
     }
 
     [Theory]
@@ -544,10 +553,10 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         int queries = 0;
-        output.NativeSizeQuery = () => changesDuringRecovery && ++queries == 1 ? new Size (50, 20) : new Size (40, 18);
+        output.NativeSizeQuery = () => changesDuringRecovery && ++queries == 1 ? new Size (90, 20) : new Size (90, 18);
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
         app.LayoutAndDraw ();
@@ -557,13 +566,13 @@ public class InlineResizeTests
         Assert.True (output.IsInlinePlacementKnown);
         Assert.False (pending.IsCompleted);
 
-        app.Driver.SetScreenSize (40, 18);
+        app.Driver.SetScreenSize (90, 18);
         time.Advance (TimeSpan.FromMilliseconds (200));
         app.LayoutAndDraw ();
         Reply (app, "\u001b[9;1R");
         app.LayoutAndDraw ();
         Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (40, app.Screen.Width);
+        Assert.Equal (90, app.Screen.Width);
         app.End (owner);
     }
 
@@ -581,7 +590,7 @@ public class InlineResizeTests
         app.LayoutAndDraw ();
         composer.Height = requestedHeight;
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        output.NativeSizeQuery = () => new Size (50, 20);
+        output.NativeSizeQuery = () => new Size (90, 20);
         bytes.Clear ();
 
         app.LayoutAndDraw ();
@@ -590,7 +599,7 @@ public class InlineResizeTests
         Assert.False (pending.IsCompleted);
         Assert.True (output.IsInlinePlacementKnown);
         Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         app.LayoutAndDraw ();
         Reply (app, "\u001b[18;1R");
         app.LayoutAndDraw ();
@@ -599,18 +608,18 @@ public class InlineResizeTests
     }
 
     [Fact]
-    public void NativeClampObservedImmediatelyBeforeErase_RemainsUnsafeAfterReturningToPolledSize ()
+    public void NativeClampObservedImmediatelyBeforeErase_UsesFreshRegionAfterReturningToPolledSize ()
     {
         StringBuilder bytes = new ();
         using ApplicationImpl app = Create (bytes, out AnsiOutput output);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
         int queries = 0;
-        output.NativeSizeQuery = () => ++queries == 1 ? new Size (50, 20) : new Size (50, 3);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        output.NativeSizeQuery = () => ++queries == 1 ? new Size (90, 20) : new Size (90, 3);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
         app.LayoutAndDraw ();
         Assert.Empty (bytes.ToString ());
@@ -618,13 +627,17 @@ public class InlineResizeTests
         Assert.True (output.IsInlineResizePending);
 
         // No size event is delivered: the terminal returns to the dimensions already polled.
-        output.NativeSizeQuery = () => new Size (50, 20);
+        output.NativeSizeQuery = () => new Size (90, 20);
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
         app.LayoutAndDraw ();
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Equal (1, app.Screen.Y);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -639,7 +652,7 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        Size native = new (50, 23);
+        Size native = new (90, 23);
         output.NativeSizeQuery = () => native;
         bytes.Clear ();
         Observe ();
@@ -649,13 +662,9 @@ public class InlineResizeTests
         Assert.Empty (bytes.ToString ());
 
         app.LayoutAndDraw ();
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Assert.Equal (15, app.Screen.Y);
-        Assert.True (output.IsInlineResizePending);
-        Reply (app, "\u001b[14;1R");
-        app.LayoutAndDraw ();
+        Assert.Contains ("\n", bytes.ToString ());
 
-        Assert.Equal (new Rectangle (0, 13, 90, 3), app.Screen);
+        Assert.Equal (new Rectangle (0, 0, 90, 3), app.Screen);
         Assert.False (output.IsInlineResizePending);
         Assert.True (output.IsInlinePlacementKnown);
         app.End (owner);
@@ -676,8 +685,10 @@ public class InlineResizeTests
         }
     }
 
-    [Fact]
-    public void ExcessiveUnprocessedNativeTransitions_FailPlacementWithoutResumingWrites ()
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void ExcessiveUnprocessedNativeTransitions_ReserveFreshRegionAndResumeWrites (bool overflowReturnsToPolledSize)
     {
         StringBuilder bytes = new ();
         using ApplicationImpl app = Create (bytes, out AnsiOutput output);
@@ -689,15 +700,23 @@ public class InlineResizeTests
         bytes.Clear ();
         for (var i = 0; i < 100; i++)
         {
-            native = new Size (i % 2 == 0 ? 50 : 90, 25);
+            int width = i % 2 == 0 ? 50 : 90;
+            if (overflowReturnsToPolledSize)
+            {
+                width = i < 64 ? 50 + i % 2 * 10 : 90;
+            }
+
+            native = new Size (width, 25);
             output.SetCursor (new Cursor { Position = Point.Empty });
         }
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         app.LayoutAndDraw ();
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -712,9 +731,9 @@ public class InlineResizeTests
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         Reply (app, "\u001b[10;1R");
-        output.NativeSizeQuery = () => new Size (50, observedHeight);
+        output.NativeSizeQuery = () => new Size (90, observedHeight);
         bytes.Clear ();
         app.LayoutAndDraw ();
         output.NativeSizeQuery = () => null;
@@ -725,13 +744,11 @@ public class InlineResizeTests
         Assert.True (output.IsInlinePlacementKnown);
         Assert.Equal (15, app.Screen.Y);
 
-        app.Driver.SetScreenSize (50, observedHeight == 0 ? 20 : observedHeight);
+        app.Driver.SetScreenSize (90, observedHeight == 0 ? 20 : observedHeight);
         time.Advance (TimeSpan.FromMilliseconds (200));
         app.LayoutAndDraw ();
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Reply (app, "\u001b[9;1R");
-        app.LayoutAndDraw ();
-        Assert.Equal (8, app.Screen.Y);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.Equal (0, app.Screen.Y);
         Assert.False (output.IsInlineResizePending);
         app.End (owner);
     }
@@ -745,15 +762,17 @@ public class InlineResizeTests
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
         app.Screen = new Rectangle (0, 15, 40, 3);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
 
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         app.LayoutAndDraw ();
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -771,15 +790,17 @@ public class InlineResizeTests
         app.LayoutAndDraw (true);
         accept = true;
         Assert.Null (output.InlineCursorRow);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
 
-        app.Driver!.SetScreenSize (50, 20);
+        app.Driver!.SetScreenSize (90, 20);
         app.LayoutAndDraw ();
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
@@ -803,8 +824,201 @@ public class InlineResizeTests
         void Resize (object? _, DrawEventArgs __)
         {
             composer.DrawingContent -= Resize;
-            app.Driver!.SetScreenSize (50, 20);
+            app.Driver!.SetScreenSize (90, 20);
         }
+    }
+
+    [Theory]
+    [InlineData (false)]
+    [InlineData (true)]
+    public void PendingRasterDuringResize_UsesFreshRegionInsteadOfErasingOldCells (bool queuedAfterResize)
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        DriverImpl driver = (DriverImpl)app.Driver!;
+        if (queuedAfterResize)
+        {
+            driver.SetScreenSize (90, 20);
+            Reply (app, "\u001b[15;1R");
+        }
+
+        driver.GetOutputBuffer ().AddRasterImage (new RasterImageCommand
+        {
+            Id = "image", DestinationCells = new Rectangle (0, 0, 1, 1), Pixels = new Color [1, 1]
+        });
+        bytes.Clear ();
+        if (!queuedAfterResize)
+        {
+            driver.SetScreenSize (90, 20);
+        }
+
+        app.LayoutAndDraw ();
+
+        string writes = bytes.ToString ();
+        Assert.Contains ("\u001b[20;1H" + new string ('\n', 20), writes);
+        Assert.DoesNotContain ("[2K", writes [..writes.IndexOf ('\n')]);
+        Assert.Equal (0, app.Screen.Y);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.False (output.IsInlineResizePending);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void ThrottledCursorQuery_RetriesWithoutQueuingDuplicateRequests ()
+    {
+        VirtualTimeProvider time = new ();
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest { Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => { } });
+        Reply (app, "\u001b[16;1R");
+        bytes.Clear ();
+
+        app.Driver.SetScreenSize (90, 20);
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        Assert.True (output.IsInlineResizePending);
+        Assert.DoesNotContain (((DriverImpl)app.Driver).AnsiRequestScheduler.QueuedRequests, request => request.Terminator == "R");
+        time.Advance (TimeSpan.FromMilliseconds (200));
+        app.LayoutAndDraw ();
+        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Reply (app, "\u001b[15;1R");
+        app.LayoutAndDraw ();
+
+        Assert.False (output.IsInlineResizePending);
+        Assert.Equal (14, app.Screen.Y);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void NativeTransitionsReturningDuringFinalGuard_DeferPlannedEraseAndUseFreshRegion ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        app.Driver!.SetScreenSize (90, 20);
+        Reply (app, "\u001b[15;1R");
+        int reads = 0;
+        bool nested = false;
+        Size native = new (90, 20);
+        output.NativeSizeQuery = () =>
+        {
+            if (nested || ++reads != 2)
+            {
+                return native;
+            }
+
+            nested = true;
+            native = new Size (50, 20);
+            output.GetSize ();
+            native = new Size (90, 20);
+            output.GetSize ();
+            nested = false;
+            return native;
+        };
+        bytes.Clear ();
+
+        app.LayoutAndDraw ();
+
+        Assert.Empty (bytes.ToString ());
+        Assert.Equal (15, app.Screen.Y);
+        Assert.True (output.IsInlineResizePending);
+        app.LayoutAndDraw ();
+        Assert.Contains ("\u001b[20;1H" + new string ('\n', 20), bytes.ToString ());
+        Assert.Equal (0, app.Screen.Y);
+        Assert.False (output.IsInlineResizePending);
+        app.End (owner);
+    }
+
+    [Theory]
+    [InlineData (0, 3)]
+    [InlineData (22, 3)]
+    [InlineData (24, 1)]
+    [InlineData (0, 25)]
+    public void WidthReflow_ReservesFreshRegionWithoutCursorQueryEvenAtEdges (int origin, int height)
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        app.ForceInlinePosition = new Point (0, origin);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = height, Text = "live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (50, 25);
+        app.LayoutAndDraw ();
+
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.Equal (50, app.Screen.Width);
+        Assert.Equal (height, app.Screen.Height);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.False (output.IsInlineResizePending);
+        Assert.Contains ("\u001b[25;1H" + new string ('\n', 25) + "\u001b[1;1H", bytes.ToString ());
+        Assert.DoesNotContain ("\u001b[6n", bytes.ToString ());
+        Assert.DoesNotContain ("[2K", bytes.ToString () [..bytes.ToString ().IndexOf ('\n')]);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void HeightShrink_ClampedCaretReservesFreshRegionWithoutPendingPrint ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        app.ForceInlinePosition = new Point (0, 22);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "still live" };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, 2), Style = CursorStyle.SteadyBar });
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (90, 24);
+        Reply (app, "\u001b[24;1R");
+        app.LayoutAndDraw ();
+
+        Assert.Equal (new Rectangle (0, 0, 90, 3), app.Screen);
+        Assert.Contains ("still live", bytes.ToString ());
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.False (output.IsInlineResizePending);
+        app.End (owner);
+    }
+
+    [Fact]
+    public void Resize_RecoversNegativeOriginAndRepaintsVisiblePopover ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 6 };
+        SessionToken owner = app.Begin (composer)!;
+        app.LayoutAndDraw ();
+        using Popover<TextField, string> popover = new () { Width = 10, Height = 2 };
+        app.Popovers!.Register (popover);
+        app.Popovers.Show (popover);
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = new Point (0, 5), Style = CursorStyle.SteadyBar });
+        int draws = 0;
+        popover.DrawingContent += (_, _) => draws++;
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (90, 20);
+        Reply (app, "\u001b[3;1R");
+        app.LayoutAndDraw ();
+
+        Assert.Equal (0, app.Screen.Y);
+        Assert.Equal (6, app.Screen.Height);
+        Assert.True (draws > 0);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.DoesNotContain ("[2J", bytes.ToString ());
+        app.Popovers.Hide (popover);
+        app.Popovers.DeRegister (popover);
+        app.End (owner);
     }
 
     [Fact]

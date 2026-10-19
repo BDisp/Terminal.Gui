@@ -101,7 +101,12 @@ public partial class AnsiOutput
                     output.Append (span.Text);
                 }
                 output.Append (EscSeqUtils.CSI_ResetAttributes);
-                output.Append (' ', terminal.Width - rows.Current.Columns);
+                if (rows.Current.Columns < terminal.Width)
+                {
+                    // Clear the suffix without turning blank padding into reflowable text.
+                    output.Append (EscSeqUtils.CSI + "K");
+                }
+
                 // Explicit CUP cancels pending autowrap even after an exact-width bottom row.
                 output.Append (EscSeqUtils.CSI_SetCursorPosition (start + i + 1, 1));
                 Write (output.ToString ().AsSpan ());

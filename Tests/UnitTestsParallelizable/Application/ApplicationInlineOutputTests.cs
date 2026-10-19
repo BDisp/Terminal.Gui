@@ -187,7 +187,8 @@ public class ApplicationInlineOutputTests
             .ProcessInput ("\u001b[2;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         Assert.True (print.IsCompletedSuccessfully);
-        Assert.Equal (3, app.Screen.Y);
+        // Width reflow starts a fresh region at row zero, followed by two completed rows.
+        Assert.Equal (2, app.Screen.Y);
         Assert.Equal (4, app.Screen.Width);
         app.End (owner);
     }

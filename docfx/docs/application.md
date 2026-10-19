@@ -1009,7 +1009,12 @@ When content is added at runtime (e.g. items appended to a `ListView`), `LayoutA
 
 ### Resize Handling
 
-On terminal resize the inline region resets: `App.Screen.Y` → 0, terminal cleared (`CSI H` + `CSI 2J`), and the next `LayoutAndDraw` re-performs initial sizing from scratch. This matches the behavior of Claude Code CLI.
+On terminal resize, the ANSI driver preserves completed output and repaints the live region without
+clearing the display or scrollback. A single height change can recover the old origin using a cursor
+report. Width reflow, clamping or uncertain recovery instead scrolls the previous viewport into
+history and reserves a fresh live region at row zero. Old live frames may remain in history;
+completed messages are not replayed. Missing cursor reports do not stop rendering.
+See [Terminal resize](inline-output.md#terminal-resize) for recovery and failure details.
 
 ### Output Buffer
 

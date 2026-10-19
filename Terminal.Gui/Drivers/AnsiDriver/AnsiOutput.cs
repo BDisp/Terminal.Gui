@@ -467,6 +467,8 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
 
     internal bool TryDequeueInlineSize (out Size size) => _inlineSizeObservations.TryDequeue (out size);
 
+    internal void CompleteInlineSizeRecovery () => InlineSizeObservationOverflow = false;
+
     internal Size? QueryNativeInlineSize ()
     {
         Size? native = NativeSizeQuery?.Invoke ();
@@ -483,14 +485,17 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         if (_inlineSizeObservations.Count >= 64)
         {
             InlineSizeObservationOverflow = true;
-            return native;
+            // Overflow requires a fresh region, so intermediate coordinates are no longer
+            // useful. Retain the latest size so recovery can still catch up with polling.
+            _inlineSizeObservations.Clear ();
         }
+
         _inlineSizeObservations.Enqueue (size);
         return native;
     }
     private int? _stagedInlineCursorRow;
 
-    // Keep the physical cursor fixed while an inline resize CPR is outstanding.
+    // Keep the physical cursor fixed while inline resize recovery is pending.
     internal bool IsInlineResizePending { get; set; }
 
     private bool HasPendingInlineSizeChange () => HasPendingInlineSizeChange (_consoleSize);
@@ -636,6 +641,12 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
                 {
                     Restore (EscSeqUtils.CSI_SetCursorPosition (appScreen.Y + appScreen.Height, 1));
                     Restore ("\n");
+                }
+                else if (QueryNativeInlineSize () is { Height: > 0, Width: > 0 } nativeSize)
+                {
+                    // Do not use an old live origin during recovery. Scroll a fresh prompt row
+                    // below the current viewport, preserving every surviving line.
+                    Restore (EscSeqUtils.CSI_SetCursorPosition (nativeSize.Height, 1) + "\n");
                 }
             }
             else

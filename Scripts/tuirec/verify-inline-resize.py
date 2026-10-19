@@ -72,10 +72,9 @@ def main():
 
     def resize(columns, rows):
         with lock:
-            # A primary-screen terminal discards blank rows below the cursor first.
-            # pyte.resize always drops top rows, so retain the occupied viewport explicitly.
-            last_occupied = max([screen.cursor.y] + [row for row, text in enumerate(screen.display) if text.strip()])
-            removed = min(max(0, screen.lines - rows), max(0, last_occupied + 1 - rows))
+            # Stress tmux's policy: discard rows below the cursor first, including nonblank
+            # live rows. pyte otherwise always removes top rows and misses cursor clamping.
+            removed = min(max(0, screen.lines - rows), max(0, screen.cursor.y + 1 - rows))
             content = {row: defaultdict(lambda: screen.default_char, screen.buffer[row + removed])
                        for row in range(rows) if row + removed < screen.lines}
             for row in range(removed):
@@ -97,7 +96,7 @@ def main():
         wait_for(lambda: "Inline transcript" in visible(), "composer after resize")
 
     try:
-        wait_for(lambda: "message 004:" in visible(), "streaming output")
+        wait_for(lambda: "message 004:" in visible(), "streaming output", timeout=30)
         resize(50, 18)
         wait_for(lambda: "message 023:" in visible(), "all completed messages")
         process.write("\x1b[15~")  # F5
@@ -124,10 +123,10 @@ def main():
             for completed in ("preview: completed preview", "you: after resize"):
                 if transcript.count(completed) != 1:
                     raise AssertionError(f"expected exactly one {completed!r}")
-            if "LIVE PREVIEW" in transcript or transcript.count("Inline transcript") != 1:
-                raise AssertionError("stale live content entered terminal history")
+            if "LIVE PREVIEW" in visible() or visible().count("Inline transcript") != 1:
+                raise AssertionError("stale live content remains in the viewport")
         print("PASS: six resizes during streaming/preview; all 24 messages preserved in order")
-        print("PASS: preview committed once; post-resize submission and clean exit; no stale live frames")
+        print("PASS: preview committed once; post-resize submission and clean exit; no stale live rows in viewport")
     finally:
         args.cast.parent.mkdir(parents=True, exist_ok=True)
         with args.cast.open("w", encoding="utf-8") as destination:

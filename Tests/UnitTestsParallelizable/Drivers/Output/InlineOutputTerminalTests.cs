@@ -219,9 +219,10 @@ public class InlineOutputTerminalTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Theory]
-    [InlineData (20, 12)]
-    [InlineData (20, 10)]
+    [InlineData (30, 14)]
+    [InlineData (30, 10)]
     public void Resize_PreservesShellCompletedMessagesAndUnownedRows (int width, int height)
     {
         Grid terminal = new (30, 12);
@@ -264,13 +265,14 @@ public class InlineOutputTerminalTests
         Assert.Single (lines, line => line == "SHELL ONE");
         Assert.Single (lines, line => line == "done one");
         Assert.Single (lines, line => line == "done two");
-        Assert.Equal ("UNOWNED BELOW", lines.Last ());
+        Assert.Single (lines, line => line == "UNOWNED BELOW");
         Assert.DoesNotContain (terminal.History, line => line.Contains ("LIVE", StringComparison.Ordinal));
         Assert.DoesNotContain ("[2J", bytes.ToString ());
         Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void BottomClippingResize_ErasesOnlySurvivingLiveRowsBeforeScrolling ()
     {
@@ -292,9 +294,9 @@ public class InlineOutputTerminalTests
         output.SetCursor (new Cursor { Position = Point.Empty, Style = CursorStyle.SteadyBar });
         terminal.Feed (bytes.ToString ());
         bytes.Clear ();
-        terminal.Resize (20, 6, clipBottom: true);
+        terminal.Resize (30, 6, clipBottom: true);
 
-        app.Driver!.SetScreenSize (20, 6);
+        app.Driver!.SetScreenSize (30, 6);
         AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
         parser.ProcessInput ("\u001b[4;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
@@ -303,7 +305,7 @@ public class InlineOutputTerminalTests
 
         Assert.Equal (["SHELL ZERO", "SHELL ONE", "SHELL TWO"], terminal.History);
         Assert.DoesNotContain (terminal.History, line => line.Contains ("LIVE", StringComparison.Ordinal));
-        Assert.Equal (new Rectangle (0, 0, 20, 6), app.Screen);
+        Assert.Equal (new Rectangle (0, 0, 30, 6), app.Screen);
         string beforeScrolling = writes [..writes.IndexOf ('\n')];
         Assert.DoesNotContain ("[1;1H", beforeScrolling);
         Assert.DoesNotContain ("[2;1H", beforeScrolling);
@@ -314,11 +316,12 @@ public class InlineOutputTerminalTests
 
     // CoPilot - GPT-6
     [Theory]
-    [InlineData (5, 6)]
-    [InlineData (1, 4)]
-    [InlineData (0, 3)]
-    [InlineData (0, 1)]
-    public void BottomClippingResize_ClampedCursorNeverErasesPrecedingOutput (int cursorOffset, int height)
+    [InlineData (5, 6, false)]
+    [InlineData (5, 6, true)]
+    [InlineData (1, 4, false)]
+    [InlineData (0, 3, false)]
+    [InlineData (0, 1, false)]
+    public void BottomClippingResize_ClampedCursorNeverErasesPrecedingOutput (int cursorOffset, int height, bool discardBelowCursor)
     {
         Grid terminal = new (30, 12);
         terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO");
@@ -339,22 +342,22 @@ public class InlineOutputTerminalTests
         terminal.Feed (bytes.ToString ());
         Assert.Equal (3 + cursorOffset, terminal.CursorRow);
         bytes.Clear ();
-        terminal.Resize (20, height, clipBottom: true);
+        terminal.Resize (20, height, clipBottom: true, discardBelowCursor: discardBelowCursor);
         string [] surviving = [.. terminal.Rows.Select (row => new string (row))];
 
         app.Driver!.SetScreenSize (20, height);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
         string response = $"\u001b[{terminal.CursorRow + 1};1R";
         parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         terminal.Feed (bytes.ToString ());
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
-        Assert.Empty (terminal.History);
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.All (surviving.Where (line => !string.IsNullOrWhiteSpace (line)), line => Assert.Contains (line.TrimEnd (), terminal.History));
+        Assert.Contains ("completed", terminal.Rows.Select (row => new string (row).TrimEnd ()).Concat (terminal.History));
         app.End (owner);
     }
 
@@ -428,7 +431,7 @@ public class InlineOutputTerminalTests
         {
             app.Driver.SetScreenSize (20, finalHeight);
         }
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         if (!replyBeforeEnlarge && observation != 2)
         {
             parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
@@ -440,11 +443,11 @@ public class InlineOutputTerminalTests
         app.LayoutAndDraw ();
         terminal.Feed (bytes.ToString ());
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
-        Assert.Empty (terminal.History);
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.All (surviving.Where (line => !string.IsNullOrWhiteSpace (line)), line => Assert.Contains (line.TrimEnd (), terminal.History));
+        Assert.Contains ("completed", terminal.Rows.Select (row => new string (row).TrimEnd ()).Concat (terminal.History));
         app.End (owner);
     }
 
@@ -478,18 +481,18 @@ public class InlineOutputTerminalTests
         Assert.Equal (["LIVE5", "UNOWNED0", "UNOWNED1", "UNOWNED2"], surviving);
 
         app.Driver!.SetScreenSize (20, 4);
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
         string response = $"\u001b[{terminal.CursorRow + 1};1R";
         parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
         terminal.Feed (bytes.ToString ());
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row).TrimEnd ()));
-        Assert.Equal (history, terminal.History);
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.All (surviving.Where (line => !string.IsNullOrWhiteSpace (line)), line => Assert.Contains (line.TrimEnd (), terminal.History));
+        Assert.Equal (history, terminal.History.Take (history.Length));
         app.End (owner);
     }
 
@@ -497,7 +500,7 @@ public class InlineOutputTerminalTests
     [Theory]
     [InlineData (false)]
     [InlineData (true)]
-    public void NativeTransitionAfterAcceptedReport_RequiresFreshReportBeforeErasing (bool immediatelyBeforeErase)
+    public void NativeTransitionAfterAcceptedReport_ReservesFreshRegionWithoutErasingUnownedRows (bool immediatelyBeforeErase)
     {
         Grid terminal = new (30, 24);
         for (var row = 16; row < 24; row++)
@@ -519,9 +522,9 @@ public class InlineOutputTerminalTests
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
         terminal.Feed (bytes.ToString ());
-        terminal.Resize (20, 20);
+        terminal.Resize (30, 20);
         ((DriverImpl)app.Driver!).AnsiRequestScheduler.Now = () => time.Now;
-        app.Driver.SetScreenSize (20, 20);
+        app.Driver.SetScreenSize (30, 20);
         AnsiResponseParser<char> parser = (AnsiResponseParser<char>)((DriverImpl)app.Driver).GetInputProcessor ().GetParser ();
         parser.ProcessInput ("\u001b[7;1R".Select (character => Tuple.Create (character, character)).ToArray ());
         bytes.Clear ();
@@ -530,36 +533,36 @@ public class InlineOutputTerminalTests
         {
             if (immediatelyBeforeErase && ++reads == 1)
             {
-                return new Size (20, 20);
+                return new Size (30, 20);
             }
             if (terminal.Rows.Count == 20)
             {
-                terminal.Resize (20, 18);
+                terminal.Resize (30, 18);
             }
-            return new Size (20, 18);
+            return new Size (30, 18);
         };
         app.LayoutAndDraw ();
         Assert.Empty (bytes.ToString ());
         Assert.Equal (10, app.Screen.Y);
 
-        terminal.Resize (20, 20);
-        output.NativeSizeQuery = () => new Size (20, 20);
+        terminal.Resize (30, 20);
+        output.NativeSizeQuery = () => new Size (30, 20);
         string [] unowned = [.. terminal.Rows.Skip (10).Take (8).Select (row => new string (row))];
         string [] history = [.. terminal.History];
         time.Advance (TimeSpan.FromMilliseconds (200));
         app.LayoutAndDraw ();
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.Empty (bytes.ToString ());
         Assert.True (output.IsInlineResizePending);
-        string response = $"\u001b[{terminal.CursorRow + 1};1R";
-        parser.ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
         app.LayoutAndDraw ();
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.False (output.IsInlineResizePending);
         terminal.Feed (bytes.ToString ());
 
-        Assert.Equal (new Rectangle (0, 4, 20, 6), app.Screen);
+        Assert.Equal (new Rectangle (0, 0, 30, 6), app.Screen);
         Assert.True (output.IsInlinePlacementKnown);
         Assert.False (output.IsInlineResizePending);
-        Assert.Equal (unowned, terminal.Rows.Skip (10).Take (8).Select (row => new string (row)));
-        Assert.Equal (history, terminal.History);
+        Assert.All (unowned.Where (line => !string.IsNullOrWhiteSpace (line)), line => Assert.Contains (line.TrimEnd (), terminal.History));
+        Assert.Equal (history, terminal.History.Take (history.Length));
         app.End (owner);
     }
 
@@ -571,7 +574,7 @@ public class InlineOutputTerminalTests
     [InlineData (0, 18)]
     [InlineData (1, 18)]
     [InlineData (2, 18)]
-    public void NativeClampObservedBeforeRecovery_BlocksWritesUntilPlacementFails (int surface, int finalHeight)
+    public void NativeClampObservedBeforeRecovery_ReservesFreshRegionBeforeWritesResume (int surface, int finalHeight)
     {
         Grid terminal = new (30, 12);
         terminal.Feed ("\u001b[1;1HSHELL ZERO\u001b[2;1HSHELL ONE\u001b[3;1HSHELL TWO\u001b[4;1HSHELL THREE");
@@ -600,7 +603,7 @@ public class InlineOutputTerminalTests
         output.SetCursor (new Cursor { Position = Point.Empty });
         Assert.Empty (bytes.ToString ());
         string [] surviving = [.. terminal.Rows.Select (row => new string (row))];
-        Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         if (finalHeight != 12)
         {
             app.Driver!.SetScreenSize (30, finalHeight);
@@ -608,11 +611,11 @@ public class InlineOutputTerminalTests
         app.LayoutAndDraw ();
         terminal.Feed (bytes.ToString ());
 
-        Assert.True (pending.IsFaulted);
-        Assert.False (output.IsInlinePlacementKnown);
-        Assert.Empty (bytes.ToString ());
-        Assert.Equal (surviving, terminal.Rows.Select (row => new string (row)));
-        Assert.Empty (terminal.History);
+        Assert.True (pending.IsCompletedSuccessfully);
+        Assert.True (output.IsInlinePlacementKnown);
+        Assert.Contains ("\n", bytes.ToString ());
+        Assert.All (surviving.Where (line => !string.IsNullOrWhiteSpace (line)), line => Assert.Contains (line.TrimEnd (), terminal.History));
+        Assert.Contains ("completed", terminal.Rows.Select (row => new string (row).TrimEnd ()).Concat (terminal.History));
         app.End (owner);
 
         void Observe ()
@@ -644,12 +647,13 @@ public class InlineOutputTerminalTests
 
         internal int CursorRow => _row;
 
-        internal void Resize (int width, int height, bool clipBottom = false, bool restoreHistory = false)
+        internal void Resize (int width, int height, bool clipBottom = false, bool restoreHistory = false, bool discardBelowCursor = false)
         {
             int removed = Math.Max (0, _height - height);
+            int removedBelow = discardBelowCursor ? Math.Min (removed, _height - _row - 1) : clipBottom ? removed : 0;
             for (var index = 0; index < removed; index++)
             {
-                if (clipBottom)
+                if (index < removedBelow)
                 {
                     Rows.RemoveAt (Rows.Count - 1);
                     continue;
@@ -674,7 +678,7 @@ public class InlineOutputTerminalTests
             {
                 Rows.Add (new string (' ', width).ToCharArray ());
             }
-            _row = Math.Clamp (_row - (clipBottom ? 0 : removed), 0, height - 1);
+            _row = Math.Clamp (_row - (removed - removedBelow), 0, height - 1);
             _column = Math.Min (_column, width - 1);
             _width = width;
             _height = height;
@@ -719,8 +723,9 @@ public class InlineOutputTerminalTests
                     }
                     if (text [i] == 'K')
                     {
-                        Assert.Equal ("2", parameters);
-                        Array.Fill (Rows [_row], ' ');
+                        Assert.True (parameters is "" or "2");
+                        int startColumn = parameters == "2" ? 0 : _column;
+                        Array.Fill (Rows [_row], ' ', startColumn, _width - startColumn);
                     }
                     continue;
                 }

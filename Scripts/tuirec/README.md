@@ -251,12 +251,22 @@ tuirec record `
 
 ## Verifying inline output and mouse reporting
 
-To verify non-clearing resize on Windows, install `pywinpty` and `pyte`, build ScenarioRunner,
+To verify non-clearing resize on Windows, install `pywinpty` and `pyte`, build ScenarioRunner in Release,
 then run `python Scripts/tuirec/verify-inline-resize.py`. This uses ConPTY directly because
 tuirec's keystroke scripts do not resize the PTY. The check resizes during streaming and an
 expanded preview, commits it, submits edited input after repeated resizes, and checks ordered,
 exactly-once history and clean exit. It saves `artifacts/InlineResize.cast`, including resize
-events, for replay. To select a different build, pass `--dll PATH`.
+events, for replay. To select a different build, pass `--dll PATH`. A cast is also saved on
+failure as diagnostic evidence; script exit status determines whether verification passed.
+Old live frames may enter history during uncertain recovery; the live viewport must contain
+one current frame.
+
+To verify actual terminal reflow and cursor clamping on Linux or macOS, install `tmux`, build
+ScenarioRunner in Release, and run `python3 Scripts/tuirec/verify-inline-resize-tmux.py`.
+This creates an isolated tmux server, tests one-row height shrinks and repeated width changes
+with a seven-row preview, verifies input-driven repaint after every resize, and checks ordered,
+unique completed messages and clean exit. It writes snapshots with an explicit `passed` field
+to `artifacts/InlineResize-tmux.json`. Pass `--dll PATH` or `--evidence PATH` to override paths.
 
 To check the Inline Transcript scenario's history, keyboard editing, and F2 mouse toggle,
 build ScenarioRunner in Release, install `pyte`, and run:
