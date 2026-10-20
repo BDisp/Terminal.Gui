@@ -653,7 +653,7 @@ if (token != null)
 // TopRunnable restored to previous runnable (if any)
 ```
 
-`Begin` prepares and starts the session but does not start the continuous event loop. Use `Run` for interactive input and ongoing UI processing. In the first active session, when no session has ended and no `Run` loop is active, a posted `await` continuation can pump one main-loop iteration; this limited behavior lets async work resume without `Run`, but is not a replacement for the event loop.
+`Begin` prepares and starts the session but does not start the event loop, and it does not change `SynchronizationContext.Current`. Use `Run` for interactive input and ongoing UI processing; `Run` installs the application's synchronization context while it executes and restores the caller's context when it returns. Without `Run`, nothing drains work posted from other threads, so use `Invoke` to reach the UI thread from an `await` continuation.
 
 ### Nested Sessions
 
