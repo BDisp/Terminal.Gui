@@ -615,9 +615,8 @@ internal partial class ApplicationImpl
                                        && (!HasEndedSession || HasRunningSession);
 
     /// <summary>
-    ///     INTERNAL: Whether queued UI work may start on the calling thread now: it is the UI thread or is pumping a
-    ///     Begin-only session, dispatch is not stopping, and a session is running. Check it under <c>_dispatchLock</c>
-    ///     when claiming queued work.
+    ///     INTERNAL: Whether queued UI work may start on the calling thread now: it is the UI thread, dispatch is not
+    ///     stopping, and a session is running. Check it under <c>_dispatchLock</c> when claiming queued work.
     /// </summary>
     internal bool CanStartUiWork => MainThreadId == Thread.CurrentThread.ManagedThreadId
                                     && !Volatile.Read (ref _dispatchStopping)
