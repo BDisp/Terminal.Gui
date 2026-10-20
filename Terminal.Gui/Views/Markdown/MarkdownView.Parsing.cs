@@ -28,7 +28,24 @@ public partial class Markdown
         _blocks.Clear ();
 
         MarkdownPipeline pipeline = MarkdownPipeline ?? _defaultPipeline;
-        MarkdownDocument doc = Markdig.Markdown.Parse (_markdown, pipeline);
+        MarkdownDocument doc;
+
+        try
+        {
+            doc = Markdig.Markdown.Parse (_markdown, pipeline);
+        }
+        catch (ArgumentException exception) when (exception.Message.StartsWith ("Markdown elements in the input are too deeply nested", StringComparison.Ordinal))
+        {
+            // Keep the configured parser limit while rendering rejected input as literal text.
+            foreach (string line in _markdown.Replace ("\r\n", "\n", StringComparison.Ordinal).Replace ('\r', '\n').Split ('\n'))
+            {
+                _blocks.Add (new IntermediateBlock ([new InlineRun (line, MarkdownStyleRole.Normal)], true));
+            }
+
+            _parsed = true;
+
+            return;
+        }
 
         LowerFromAst (doc);
 

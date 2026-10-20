@@ -175,7 +175,26 @@ public class MarkdownDependencyRegressionTests
         MarkdownPipeline pipeline = new MarkdownPipelineBuilder { MaximumNestingDepth = 16 }.Build ();
         using Terminal.Gui.Views.Markdown view = new () { Width = 60, Height = 20, MarkdownPipeline = pipeline, Text = new string ('>', 20) };
 
-        Assert.Throws<ArgumentException> (() => view.Layout ());
+        Assert.Throws<ArgumentException> (() => Markdig.Markdown.Parse (view.Text, pipeline));
+        view.Layout ();
+
+        Assert.Equal ([new string ('>', 20)], RenderLines (view.Text, pipeline: pipeline));
+    }
+
+    [Fact]
+    public void Default_Pipeline_Deep_Nesting_Renders_Literal_Source ()
+    {
+        string source = new string ('>', 140) + " **literal**";
+        using Terminal.Gui.Views.Markdown view = new ()
+        {
+            Text = source,
+            Width = 200,
+            Height = 10
+        };
+        view.Layout ();
+
+        Assert.Equal ([source], RenderLines (source, 200));
+        Assert.False (view.ScrollToAnchor ("literal"));
     }
 
     [Fact]
