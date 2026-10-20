@@ -141,9 +141,12 @@ public partial class Markdown
             }
 
             List<RenderedLine> wrapped = WrapBlock (block, viewportWidth);
+            string? sourceText = block.SourceText;
 
             foreach (RenderedLine line in wrapped)
             {
+                line.SourceText = sourceText;
+                sourceText = sourceText is null ? null : string.Empty;
                 _renderedLines.Add (line);
                 _maxLineWidth = Math.Max (_maxLineWidth, line.Width);
             }

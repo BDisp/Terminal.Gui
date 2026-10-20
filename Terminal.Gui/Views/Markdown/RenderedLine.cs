@@ -4,6 +4,7 @@ internal sealed class RenderedLine (IReadOnlyList<StyledSegment> segments, bool 
 {
     public IReadOnlyList<StyledSegment> Segments { get; } = segments;
     public bool WrapEligible { get; } = wrapEligible;
+    public string? SourceText { get; set; }
     public int Width { get; } = width;
     public bool IsCodeBlock { get; } = isCodeBlock;
     public bool IsThematicBreak { get; } = isThematicBreak;

@@ -131,7 +131,10 @@ public partial class Markdown
                 break;
 
             case AlertBlock alert:
-                _blocks.Add (new IntermediateBlock ([new InlineRun (alert.Kind.ToString ().ToUpperInvariant (), MarkdownStyleRole.Strong)], true, prefix + "> ", contPrefix + "> "));
+                // Markdig accepts custom alphabetic kinds; retain their names and markers too.
+                string kind = alert.Kind.ToString ().ToUpperInvariant ();
+                string marker = TranslateListMarkerText (prefix + "> ") + $"[!{kind}]";
+                _blocks.Add (new IntermediateBlock ([new InlineRun (kind, MarkdownStyleRole.Strong)], true, prefix + "> ", contPrefix + "> ", sourceText: marker));
 
                 foreach (Block content in alert)
                 {

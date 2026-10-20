@@ -9,11 +9,13 @@ internal sealed class IntermediateBlock (IReadOnlyList<InlineRun> runs,
                                          bool isThematicBreak = false,
                                          TableData? tableData = null,
                                          string? language = null,
-                                         MarkdownTableContent? tableContent = null)
+                                         MarkdownTableContent? tableContent = null,
+                                         string? sourceText = null)
 {
     public IReadOnlyList<InlineRun> Runs { get; } = runs;
     public bool Wrap { get; } = wrap;
     public string Prefix { get; } = prefix;
+    public string? SourceText { get; } = sourceText;
     public string ContinuationPrefix { get; } = continuationPrefix;
     public bool IsCodeBlock { get; } = isCodeBlock;
     public bool IsThematicBreak { get; } = isThematicBreak;
