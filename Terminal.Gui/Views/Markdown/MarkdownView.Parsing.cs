@@ -88,14 +88,16 @@ public partial class Markdown
             case DefinitionItem definition:
                 foreach (Block content in definition)
                 {
-                    if (content is DefinitionTerm)
-                    {
-                        WalkBlock (content, prefix, contPrefix, defaultRole);
+                    int previousCount = _blocks.Count;
+                    string indent = content is DefinitionTerm ? string.Empty : "  ";
+                    WalkBlock (content, prefix + indent, contPrefix + indent, defaultRole);
 
+                    if (_blocks.Count == previousCount)
+                    {
                         continue;
                     }
 
-                    WalkBlock (content, prefix + "  ", contPrefix + "  ", defaultRole);
+                    prefix = contPrefix;
                 }
 
                 break;
@@ -116,7 +118,7 @@ public partial class Markdown
 
                 foreach (Block content in alert)
                 {
-                    WalkBlock (content, prefix + "> ", contPrefix + "> ", MarkdownStyleRole.Quote);
+                    WalkBlock (content, contPrefix + "> ", contPrefix + "> ", MarkdownStyleRole.Quote);
                 }
 
                 break;
@@ -493,7 +495,15 @@ public partial class Markdown
         {
             foreach (Block child in container)
             {
+                int previousCount = _blocks.Count;
                 WalkBlock (child, prefix, contPrefix, defaultRole);
+
+                if (_blocks.Count == previousCount)
+                {
+                    continue;
+                }
+
+                prefix = contPrefix;
             }
         }
     }
