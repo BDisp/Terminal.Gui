@@ -85,7 +85,12 @@ abbreviation label with adjacent emphasis, and table output. Its asciinema cast
 was read back and a rendered frame inspected during validation.
 
 Local verification used .NET 10.0.113 on Linux ARM64. The solution build passed,
-all 417 Markdown tests passed, all 35 nonparallel tests passed, and all 438
+all 418 Markdown tests passed, all 35 nonparallel tests passed, and all 438
 integration tests passed. The native executable was published with GCC and its
 `--smoke-test` assertions and application lifecycle passed. Existing CI uses its
 platform toolchain on Linux and Windows.
+
+The final full parallel suite passed with 18,061 successes and 17 skips. It ran
+with `NO_COLOR` unset, `TERM=xterm-256color`, and `COLORTERM=truecolor`; the shell's
+default `TERM=dumb` / `NO_COLOR=1` produces four unrelated color-output assertion
+failures.

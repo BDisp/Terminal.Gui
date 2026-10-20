@@ -70,7 +70,7 @@ public partial class Markdown
         switch (block)
         {
             case HeadingBlock heading:
-                HandleHeadingBlock (heading, prefix);
+                HandleHeadingBlock (heading, prefix, contPrefix);
 
                 break;
 
@@ -144,7 +144,7 @@ public partial class Markdown
         }
     }
 
-    private void HandleHeadingBlock (HeadingBlock heading, string prefix)
+    private void HandleHeadingBlock (HeadingBlock heading, string prefix, string contPrefix)
     {
         List<InlineRun> runs = WalkInlines (heading.Inline?.FirstChild, MarkdownStyleRole.Heading);
 
@@ -162,7 +162,7 @@ public partial class Markdown
             runs.Insert (0, new InlineRun (prefix, MarkdownStyleRole.HeadingMarker));
         }
 
-        _blocks.Add (new IntermediateBlock (runs, true, continuationPrefix: prefix, anchor: anchor));
+        _blocks.Add (new IntermediateBlock (runs, true, continuationPrefix: contPrefix, anchor: anchor));
     }
 
     private void HandleParagraphBlock (ParagraphBlock para, string prefix, string contPrefix, MarkdownStyleRole defaultRole)

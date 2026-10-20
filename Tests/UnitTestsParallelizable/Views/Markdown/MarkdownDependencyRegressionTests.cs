@@ -60,6 +60,7 @@ public class MarkdownDependencyRegressionTests
     [InlineData ("> first  \n> second", "> first", "> second")]
     [InlineData ("> first  \n> second\n> ---", "> ## first", "> second")]
     [InlineData ("- first  \n  second", "• first", "  second")]
+    [InlineData ("- first  \n  second\n  ---", "• ## first", "  second")]
     public void HardBreak_Starts_New_Rendered_Line (string markdown, string first, string second)
     {
         Assert.Equal ([first, second], RenderLines (markdown));

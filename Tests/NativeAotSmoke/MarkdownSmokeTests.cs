@@ -26,6 +26,7 @@ internal static class MarkdownSmokeTests
         AssertRendered (view, "Term **bold**\n: definition", "Term bold\n  definition");
         AssertRendered (view, "paragraph\n\n-", "paragraph\n\n•");
         AssertRendered (view, "- first  \n  second", "• first\n  second");
+        AssertRendered (view, "- first  \n  second\n  ---", "• ## first\n  second");
         AssertRendered (view, "*[HTML]: HyperText Markup Language\n\nHTML supports **bold**", "HTML supports bold");
         AssertRendered (view, "[reference][target]\n\n[target]: https://example.com", "reference");
         AssertRendered (view, "```csharp\nint answer = 42;\n```", "int answer = 42;");
