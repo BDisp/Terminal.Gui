@@ -8,7 +8,8 @@ internal sealed class IntermediateBlock (IReadOnlyList<InlineRun> runs,
                                          string? anchor = null,
                                          bool isThematicBreak = false,
                                          TableData? tableData = null,
-                                         string? language = null)
+                                         string? language = null,
+                                         MarkdownTableContent? tableContent = null)
 {
     public IReadOnlyList<InlineRun> Runs { get; } = runs;
     public bool Wrap { get; } = wrap;
@@ -19,6 +20,8 @@ internal sealed class IntermediateBlock (IReadOnlyList<InlineRun> runs,
 
     /// <summary>Gets the parsed table data if this block represents a table; otherwise <see langword="null"/>.</summary>
     public TableData? TableData { get; } = tableData;
+
+    public MarkdownTableContent? TableContent { get; } = tableContent;
 
     /// <summary>Gets whether this block represents a Markdown table.</summary>
     public bool IsTable => TableData is { };

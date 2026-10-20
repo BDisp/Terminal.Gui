@@ -14,4 +14,5 @@ internal sealed class InlineRun (
     public string? ImageSource { get; } = imageSource;
     public Attribute? Attribute { get; } = attribute;
     public VisualRole? Role { get; } = role;
+    public TextStyle AdditionalStyle { get; init; }
 }

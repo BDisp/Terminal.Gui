@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Abbreviations;
+using Markdig.Extensions.Alerts;
 using Markdig.Extensions.DefinitionLists;
 using Markdig.Extensions.Tables;
 using Markdig.Extensions.TaskLists;
@@ -107,6 +108,16 @@ public partial class Markdown
 
             case ThematicBreakBlock:
                 _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.ThematicBreak)], false, isThematicBreak: true));
+
+                break;
+
+            case AlertBlock alert:
+                _blocks.Add (new IntermediateBlock ([new InlineRun (alert.Kind.ToString ().ToUpperInvariant (), MarkdownStyleRole.Strong)], true, prefix + "> ", contPrefix + "> "));
+
+                foreach (Block content in alert)
+                {
+                    WalkBlock (content, prefix + "> ", contPrefix + "> ", MarkdownStyleRole.Quote);
+                }
 
                 break;
 
@@ -254,6 +265,8 @@ public partial class Markdown
         List<string> headers = [];
         Alignment [] alignments = [];
         List<string []> rows = [];
+        List<StyledSegment> [] headerSegments = [];
+        List<List<StyledSegment> []> rowSegments = [];
         var headerParsed = false;
 
         foreach (Block tableRow in table)
@@ -268,6 +281,7 @@ public partial class Markdown
             if (!headerParsed)
             {
                 headers.AddRange (cells);
+                headerSegments = row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Heading)).ToArray ();
 
                 alignments = table.ColumnDefinitions.Take (headers.Count)
                                   .Select (col => col.Alignment switch
@@ -282,6 +296,7 @@ public partial class Markdown
             else if (!row.IsHeader)
             {
                 rows.Add (cells);
+                rowSegments.Add (row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Normal)).ToArray ());
             }
         }
 
@@ -299,13 +314,36 @@ public partial class Markdown
         }
 
         TableData tableData = new (headers.ToArray (), alignments, rows.ToArray ());
-        _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.Table)], false, tableData: tableData));
+        MarkdownTableContent content = new (headerSegments, rowSegments.ToArray ());
+        _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.Table)], false, tableData: tableData, tableContent: content));
+    }
+
+    private static List<StyledSegment> ExtractCellSegments (TableCell cell, MarkdownStyleRole defaultRole)
+    {
+        List<StyledSegment> segments = [];
+
+        foreach (Block content in cell)
+        {
+            if (content is not ParagraphBlock paragraph)
+            {
+                continue;
+            }
+
+            if (segments.Count > 0)
+            {
+                segments.Add (new StyledSegment (" ", defaultRole));
+            }
+
+            segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (WalkInlines (paragraph.Inline?.FirstChild, defaultRole)));
+        }
+
+        return segments;
     }
 
     private static string ExtractCellText (TableCell cell)
     {
-        // Option A: reconstruct raw markdown-like text from the AST so MarkdownTable
-        // can re-parse inline formatting with its existing MarkdownInlineParser path.
+        // Keep the public text model and clipboard representation in sync. Rendering
+        // uses ExtractCellSegments so this serialization does not control display fidelity.
         StringBuilder sb = new ();
 
         foreach (Block child in cell)
@@ -339,9 +377,25 @@ public partial class Markdown
                     break;
 
                 case CodeInline code:
-                    sb.Append ('`');
+                    int backticks = Regex.Matches (code.Content, "`+").Select (match => match.Length).DefaultIfEmpty (0).Max ();
+                    string delimiter = new ('`', backticks + 1);
+                    bool padCode = code.Content.StartsWith ('`') || code.Content.EndsWith ('`')
+                                   || (code.Content.StartsWith (' ') && code.Content.EndsWith (' ') && !string.IsNullOrWhiteSpace (code.Content));
+                    sb.Append (delimiter);
+
+                    if (padCode)
+                    {
+                        sb.Append (' ');
+                    }
+
                     sb.Append (code.Content);
-                    sb.Append ('`');
+
+                    if (padCode)
+                    {
+                        sb.Append (' ');
+                    }
+
+                    sb.Append (delimiter);
 
                     break;
 
@@ -465,7 +519,17 @@ public partial class Markdown
                 case EmphasisInline em:
                     MarkdownStyleRole emRole = em is { DelimiterChar: '~', DelimiterCount: >= 2 } ? MarkdownStyleRole.Strikethrough :
                                                em.DelimiterCount >= 2 ? MarkdownStyleRole.Strong : MarkdownStyleRole.Emphasis;
-                    runs.AddRange (WalkInlines (em.FirstChild, emRole));
+                    TextStyle emphasisStyle = emRole switch
+                    {
+                        MarkdownStyleRole.Strong => TextStyle.Bold,
+                        MarkdownStyleRole.Strikethrough => TextStyle.Strikethrough,
+                        _ => TextStyle.Italic
+                    };
+                    runs.AddRange (WalkInlines (em.FirstChild, emRole)
+                                       .Select (run => new InlineRun (run.Text, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role)
+                                       {
+                                           AdditionalStyle = run.AdditionalStyle | emphasisStyle
+                                       }));
 
                     break;
 
@@ -485,7 +549,10 @@ public partial class Markdown
                 case LinkInline link:
                     string? url = link.Url;
                     List<InlineRun> linkRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.Link);
-                    runs.AddRange (linkRuns.Select (r => new InlineRun (r.Text, MarkdownStyleRole.Link, url, r.ImageSource, r.Attribute)));
+                    runs.AddRange (linkRuns.Select (r => new InlineRun (r.Text, MarkdownStyleRole.Link, url, r.ImageSource, r.Attribute, r.Role)
+                    {
+                        AdditionalStyle = r.AdditionalStyle
+                    }));
 
                     break;
 
@@ -550,7 +617,7 @@ public partial class Markdown
         }
 
         InlineRun first = runs [0];
-        runs [0] = new InlineRun (trimmed, first.StyleRole, first.Url, first.ImageSource, first.Attribute);
+        runs [0] = new InlineRun (trimmed, first.StyleRole, first.Url, first.ImageSource, first.Attribute, first.Role) { AdditionalStyle = first.AdditionalStyle };
 
         if (runs [0].Text.Length == 0)
         {

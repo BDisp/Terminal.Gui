@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdown = Terminal.Gui.Views.Markdown;
@@ -30,6 +31,19 @@ internal static class MarkdownSmokeTests
         AssertRendered (view, "*[HTML]: HyperText Markup Language\n\nHTML supports **bold**", "HTML supports bold");
         AssertRendered (view, "[reference][target]\n\n[target]: https://example.com", "reference");
         AssertRendered (view, "```csharp\nint answer = 42;\n```", "int answer = 42;");
+        AssertRendered (view, "> [!WARNING]\n> Critical action", "> WARNING\n> Critical action");
+
+        string codeTable = Normalize (view.RenderToAnsi ("| Code |\n| --- |\n| ``a`b`` |"));
+
+        if (!codeTable.Contains (" a`b ", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException ("AOT Markdown table code span was corrupted.");
+        }
+
+        ExerciseTableLinks ();
+
+        view.MarkdownPipeline = new MarkdownPipelineBuilder ().UseAlertBlocks (allowNestedAlerts: true).Build ();
+        AssertRendered (view, "> outer\n>\n> > [!WARNING]\n> > nested", "> outer\n> > WARNING\n> > nested");
 
         view.MarkdownPipeline = new MarkdownPipelineBuilder ().UseAdvancedExtensions ().UseEmojiAndSmiley ().UseCjkFriendlyEmphasis ().Build ();
         string table = view.RenderToAnsi ("| Name | Value |\n| --- | --- |\n| cell | :x: |");
@@ -42,14 +56,54 @@ internal static class MarkdownSmokeTests
 
     private static void AssertRendered (Markdown view, string markdown, string expected)
     {
-        string ansi = view.RenderToAnsi (markdown);
-        string plain = Regex.Replace (ansi, @"\x1b\[[0-?]*[ -/]*[@-~]", string.Empty);
-        plain = Regex.Replace (plain, @"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", string.Empty);
-        string normalized = string.Join ("\n", plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ()));
+        string normalized = Normalize (view.RenderToAnsi (markdown));
 
         if (normalized != expected)
         {
             throw new InvalidOperationException ($"AOT Markdown rendering failed: expected '{expected}', got '{normalized}'.");
+        }
+    }
+
+    private static string Normalize (string ansi)
+    {
+        string plain = Regex.Replace (ansi, @"\x1b\[[0-?]*[ -/]*[@-~]", string.Empty);
+        plain = Regex.Replace (plain, @"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", string.Empty);
+
+        return string.Join ("\n", plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ()));
+    }
+
+    private static void ExerciseTableLinks ()
+    {
+        const string url = "https://example.com/path_(part)";
+        using IApplication app = Application.Create ().Init (Terminal.Gui.Drivers.DriverRegistry.Names.ANSI);
+        app.Driver!.SetScreenSize (60, 12);
+        using Runnable window = new () { Width = Dim.Fill (), Height = Dim.Fill (), BorderStyle = LineStyle.None };
+        Markdown markdown = new () { Text = $"| Link |\n| --- |\n| [**Testing [Header]**]({url}) |", Width = Dim.Fill (), Height = Dim.Fill () };
+        window.Add (markdown);
+        List<string> activated = [];
+        markdown.LinkClicked += (_, e) =>
+                                {
+                                    activated.Add (e.Url);
+                                    e.Handled = true;
+                                };
+        app.Begin (window);
+        app.LayoutAndDraw ();
+        MarkdownTable table = markdown.SubViews.OfType<MarkdownTable> ().Single ();
+        Point position = table.ViewportToScreen (new Point (2, 3));
+        TextStyle style = app.Driver.Contents! [position.Y, position.X].Attribute!.Value.Style;
+
+        if ((style & (TextStyle.Bold | TextStyle.Underline)) != (TextStyle.Bold | TextStyle.Underline))
+        {
+            throw new InvalidOperationException ("AOT Markdown table link styling was lost.");
+        }
+
+        table.NewMouseEvent (new Mouse { Position = new Point (2, 3), Flags = MouseFlags.LeftButtonClicked });
+        table.SetFocus ();
+        table.InvokeCommand (Command.Accept);
+
+        if (activated.Count != 2 || activated.Any (target => target != url))
+        {
+            throw new InvalidOperationException ("AOT Markdown table link activation changed its target.");
         }
     }
 }

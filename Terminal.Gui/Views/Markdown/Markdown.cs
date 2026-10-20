@@ -590,6 +590,9 @@ public partial class Markdown : View, IDesignable
                                                           | [Links](https://tui-cs.github.io/Terminal.Gui/api/Terminal.Gui.Views.MarkdownTable.html) | ✅ Totally! |
                                                           | Inline `code`  | ✅ *Awesome!*   |
                                                           | Emojis 🎉      | ✅ **Whoa!**      |
+                                                          | Code with a backtick | ``a`b`` |
+                                                          | Nested formatting | **bold *and italic*** with ~~strikethrough~~ |
+                                                          | Nested link label | [Testing [Header]](https://example.com/path_(part)) |
 
                                                           **table** with different alignments:
 
@@ -609,6 +612,9 @@ public partial class Markdown : View, IDesignable
                                                           ## Block Quotes
 
                                                           > **Tip:** This is a block quote with *inline formatting*.
+
+                                                          > [!WARNING]
+                                                          > Alert kinds remain visible alongside their content.
 
                                                           Here's a multi-line block quote with a link, code, and more:
 

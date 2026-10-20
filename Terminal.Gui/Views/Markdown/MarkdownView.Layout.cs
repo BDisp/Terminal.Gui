@@ -20,7 +20,7 @@ public partial class Markdown
                 continue;
             }
 
-            int width = CalculateWidth (block.Runs.Select (r => new StyledSegment (r.Text, r.StyleRole, r.Url, r.ImageSource, r.Attribute, r.Role)).ToList ());
+            int width = CalculateWidth (MarkdownAttributeHelper.ToStyledSegments (block.Runs));
 
             if (!string.IsNullOrEmpty (block.Prefix))
             {
@@ -86,6 +86,11 @@ public partial class Markdown
                     Y = startLine,
                     Width = Dim.Fill ()
                 };
+                if (block.TableContent is { } tableContent)
+                {
+                    tableView.SetParsedContent (tableContent);
+                }
+
                 tableView.Recalculate (tableLayoutWidth);
 
                 // Capture the rendered height BEFORE Add() — Add triggers EndInit → Layout
@@ -255,7 +260,7 @@ public partial class Markdown
             segments.Add (new StyledSegment (block.Prefix, MarkdownStyleRole.ListMarker));
         }
 
-        segments.AddRange (block.Runs.Select (run => new StyledSegment (run.Text, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role)));
+        segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (block.Runs));
 
         int width = CalculateWidth (segments);
 
@@ -372,7 +377,7 @@ public partial class Markdown
                     }
                 }
 
-                currentSegments.Add (new StyledSegment (grapheme, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role));
+                currentSegments.Add (new StyledSegment (grapheme, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role) { AdditionalStyle = run.AdditionalStyle });
                 currentWidth += graphemeWidth;
             }
         }

@@ -1,6 +1,6 @@
 # Markdig dependency audit
 
-Reviewed on 2026-10-20 for Terminal.Gui PR #5736, upgrading Markdig to 1.4.2.
+Reviewed on 2026-10-20 for Terminal.Gui PR #5737 (superseding #5736), upgrading Markdig to 1.4.2.
 
 ## Dependency history
 
@@ -52,15 +52,18 @@ not attempt to duplicate Markdig's entire CommonMark test suite.
 - `InferColumnWidthsFromSeparator` (0.41.0) produces Markdig column-width metadata,
   but `TableData` currently carries only text and alignment. Honoring those widths
   needs a separate table-sizing API and layout design.
+- [Issue #5738](https://github.com/tui-cs/Terminal.Gui/issues/5738) tracks inferred
+  sizing hints and richer table geometry, with design questions and acceptance criteria.
 - Grid-table row/column spans and arbitrary block content exceed the current
   `MarkdownTable` model. The first grid row is displayed as its header. This PR
   verifies content preservation for the upstream open-cell regression, not full grid fidelity.
-- Table cells are converted to Markdown-like text and parsed again by the simpler
-  `MarkdownInlineParser`. This limits nested formatting, arbitrary code delimiters,
-  and explicit multiline cell layout. Replacing that path with structured styled
-  cells is a separate change.
-- Alert kinds are not styled as dedicated terminal alert headers. Nested alert
-  parsing can be enabled, but that does not imply full alert presentation support.
+- Tables rendered by `Markdown` now carry parsed inline segments through layout,
+  drawing, and link hit testing, preserving code, escaped literals, combined styles,
+  and original link targets. Their public text representation remains available
+  for compatibility and clipboard reconstruction. Standalone string-based
+  `MarkdownTable` input retains the simpler `MarkdownInlineParser` behavior.
+- Alert kinds are now visible as bold quote headers. Nested alert parsing remains
+  opt-in; dedicated per-kind colors are not introduced.
 - `FindClosestBlock` / `FindBlockAtPosition` fixes concern reference/footnote groups.
   Terminal.Gui does not call them and discards the parsed document after lowering.
   Source-to-preview navigation would first require retained source mappings.
@@ -70,27 +73,33 @@ not attempt to duplicate Markdig's entire CommonMark test suite.
 ## Verification
 
 `MarkdownDependencyRegressionTests` covers the integration cases above.
+`MarkdownParsedContentTests` checks actual rendered cell text and attributes,
+keyboard/mouse link activation, wrapped link hit testing, safe code delimiters,
+public data reassignment, and visible alert kinds, including opt-in nested alerts.
 The full Markdown test namespace also covers existing layout, drawing, selection,
 links, code blocks, tables, and ANSI output.
 
 `Tests/NativeAotSmoke/MarkdownSmokeTests.cs` checks actual native rendering of
 headings, anchors, definitions, empty list items, hard breaks, abbreviations,
-reference links, fenced code, tables, and optional emoji/CJK pipeline construction.
+reference links, fenced code, tables with embedded backticks, styled table links
+with keyboard/mouse activation, visible and nested alert kinds, and optional
+emoji/CJK pipeline construction.
 It throws on mismatched output so the existing Linux and Windows AOT CI steps fail
 on a regression. The interactive AOT view gallery now includes Markdown too.
 
 The [PTY recording](../docfx/images/views/MarkdownDependencyRegression.gif) shows
 the setext hard break, definition term and indentation, empty bullet,
-abbreviation label with adjacent emphasis, and table output. Its asciinema cast
+escaped literals, embedded backticks, nested styles, a visible warning kind,
+and activation of the original table-link URL. Its asciinema cast
 was read back and a rendered frame inspected during validation.
 
 Local verification used .NET 10.0.113 on Linux ARM64. The solution build passed,
-all 418 Markdown tests passed, all 35 nonparallel tests passed, and all 438
+all 442 Markdown tests passed, all 35 nonparallel tests passed, and all 438
 integration tests passed. The native executable was published with GCC and its
 `--smoke-test` assertions and application lifecycle passed. Existing CI uses its
 platform toolchain on Linux and Windows.
 
-The final full parallel suite passed with 18,061 successes and 17 skips. It ran
+The final full parallel suite passed with 18,085 successes and 17 skips. It ran
 with `NO_COLOR` unset, `TERM=xterm-256color`, and `COLORTERM=truecolor`; the shell's
 default `TERM=dumb` / `NO_COLOR=1` produces four unrelated color-output assertion
 failures.
