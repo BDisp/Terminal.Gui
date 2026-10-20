@@ -283,6 +283,21 @@ public partial class Markdown
         {
             foreach (string grapheme in GraphemeHelper.GetGraphemes (run.Text))
             {
+                if (grapheme == "\n")
+                {
+                    lines.Add (new RenderedLine ([.. currentSegments], true, currentWidth));
+                    currentSegments.Clear ();
+                    currentWidth = continuationPrefix.GetColumns ();
+                    firstLine = false;
+
+                    if (!string.IsNullOrEmpty (continuationPrefix))
+                    {
+                        currentSegments.Add (new StyledSegment (continuationPrefix, MarkdownStyleRole.ListMarker));
+                    }
+
+                    continue;
+                }
+
                 int graphemeWidth = Math.Max (grapheme.GetColumns (), 1);
 
                 if (currentWidth + graphemeWidth > viewportWidth && currentSegments.Count > 0)

@@ -532,6 +532,8 @@ public partial class Markdown : View, IDesignable
                                                           * [Basic Formatting](#basic-formatting)
                                                           * [Links](#links)
                                                           * [Checklist](#checklist)
+                                                          * [Definition Lists](#definition-lists)
+                                                          * [Hard Line Breaks](#hard-line-breaks)
                                                           * [Code Blocks](#code-blocks)
                                                           * [Tables](#tables)
                                                           * [Separators](#separators)
@@ -614,6 +616,16 @@ public partial class Markdown : View, IDesignable
                                                           > `inline code`, and [links](https://example.com).
                                                           >
                                                           > They can also span multiple lines with blank quote lines between paragraphs.
+
+                                                          ## Definition Lists
+
+                                                          Terminal.Gui
+                                                          : A toolkit for terminal user interfaces.
+
+                                                          ## Hard Line Breaks
+
+                                                          This line ends with a backslash.\
+                                                          This starts on a new line without a new paragraph.
 
                                                           That's all folks! 👋
                                                           """;

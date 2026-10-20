@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 using Markdig;
+using Markdig.Extensions.Abbreviations;
+using Markdig.Extensions.DefinitionLists;
 using Markdig.Extensions.Tables;
 using Markdig.Extensions.TaskLists;
 using Markdig.Helpers;
@@ -77,6 +79,26 @@ public partial class Markdown
 
                 break;
 
+            case DefinitionTerm term:
+                _blocks.Add (new IntermediateBlock (WalkInlines (term.Inline?.FirstChild, defaultRole), true, prefix, contPrefix));
+
+                break;
+
+            case DefinitionItem definition:
+                foreach (Block content in definition)
+                {
+                    if (content is DefinitionTerm)
+                    {
+                        WalkBlock (content, prefix, contPrefix, defaultRole);
+
+                        continue;
+                    }
+
+                    WalkBlock (content, prefix + "  ", contPrefix + "  ", defaultRole);
+                }
+
+                break;
+
             case FencedCodeBlock:
             case CodeBlock:
                 HandleCodeBlockNode ((LeafBlock)block);
@@ -127,7 +149,7 @@ public partial class Markdown
         List<InlineRun> runs = WalkInlines (heading.Inline?.FirstChild, MarkdownStyleRole.Heading);
 
         // Compute anchor slug from heading text before inserting the marker
-        string headingText = string.Concat (runs.Select (r => r.Text));
+        string headingText = string.Concat (runs.Select (r => r.Text)).Replace ('\n', ' ');
         string anchor = DeduplicateSlug (GenerateAnchorSlug (headingText), _slugCounts);
 
         if (ShowHeadingPrefix)
@@ -140,7 +162,7 @@ public partial class Markdown
             runs.Insert (0, new InlineRun (prefix, MarkdownStyleRole.HeadingMarker));
         }
 
-        _blocks.Add (new IntermediateBlock (runs, true, anchor: anchor));
+        _blocks.Add (new IntermediateBlock (runs, true, continuationPrefix: prefix, anchor: anchor));
     }
 
     private void HandleParagraphBlock (ParagraphBlock para, string prefix, string contPrefix, MarkdownStyleRole defaultRole)
@@ -181,6 +203,13 @@ public partial class Markdown
             string marker = list.IsOrdered ? $"{listItem.Order}. " : "• ";
             string itemPrefix = prefix + marker;
             string itemCont = contPrefix + new string (' ', marker.GetColumns ());
+
+            if (listItem.Count == 0)
+            {
+                _blocks.Add (new IntermediateBlock ([], true, itemPrefix, itemCont));
+
+                continue;
+            }
 
             var isFirst = true;
 
@@ -339,6 +368,11 @@ public partial class Markdown
 
                     break;
 
+                case AbbreviationInline abbreviation:
+                    sb.Append (abbreviation.Abbreviation.Label);
+
+                    break;
+
                 case AutolinkInline auto:
                     sb.Append (auto.Url);
 
@@ -460,8 +494,8 @@ public partial class Markdown
 
                     break;
 
-                case LineBreakInline:
-                    runs.Add (new InlineRun (" ", defaultRole));
+                case LineBreakInline lineBreak:
+                    runs.Add (new InlineRun (lineBreak.IsHard ? "\n" : " ", defaultRole));
 
                     break;
 
@@ -477,6 +511,11 @@ public partial class Markdown
 
                 case HtmlInline:
                     // Inline HTML — skip in terminal context.
+                    break;
+
+                case AbbreviationInline abbreviation:
+                    runs.Add (new InlineRun (abbreviation.Abbreviation.Label ?? string.Empty, defaultRole));
+
                     break;
 
                 default:
