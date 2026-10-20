@@ -277,6 +277,7 @@ public partial class Markdown
         List<StyledSegment> currentSegments = [];
         var currentWidth = 0;
         var firstLine = true;
+        var endedWithHardBreak = false;
 
         if (!string.IsNullOrEmpty (firstPrefix))
         {
@@ -290,19 +291,27 @@ public partial class Markdown
             {
                 if (grapheme == "\n")
                 {
+                    if (currentSegments.Count == 0)
+                    {
+                        currentSegments.Add (new StyledSegment ("", MarkdownStyleRole.Normal));
+                    }
+
                     lines.Add (new RenderedLine ([.. currentSegments], true, currentWidth));
                     currentSegments.Clear ();
-                    currentWidth = continuationPrefix.GetColumns ();
+                    currentWidth = 0;
                     firstLine = false;
+                    endedWithHardBreak = true;
 
                     if (!string.IsNullOrEmpty (continuationPrefix))
                     {
                         currentSegments.Add (new StyledSegment (continuationPrefix, MarkdownStyleRole.ListMarker));
+                        currentWidth += continuationPrefix.GetColumns ();
                     }
 
                     continue;
                 }
 
+                endedWithHardBreak = false;
                 int graphemeWidth = Math.Max (grapheme.GetColumns (), 1);
 
                 if (currentWidth + graphemeWidth > viewportWidth && currentSegments.Count > 0)
@@ -380,6 +389,12 @@ public partial class Markdown
                 currentSegments.Add (new StyledSegment (grapheme, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role) { AdditionalStyle = run.AdditionalStyle });
                 currentWidth += graphemeWidth;
             }
+        }
+
+        // A terminal hard break ends the current line; it does not start a phantom prefix-only line.
+        if (endedWithHardBreak)
+        {
+            return lines;
         }
 
         if (currentSegments.Count == 0)
