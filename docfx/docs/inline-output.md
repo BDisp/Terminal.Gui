@@ -169,47 +169,40 @@ for applications that do not use this API.
 
 ## Terminal resize
 
-The built-in ANSI driver preserves completed output across terminal resizes without a
-display/scrollback clear or replaying messages. During a single height change it queries
-the cursor and, if the report proves the old live origin, erases only surviving live rows
-before reserving missing height and repainting. Frames park the hidden cursor at the first
-live row before the main loop restores the visible caret.
+The built-in ANSI driver starts a fresh live region after every terminal resize. It moves
+to the bottom of the reported viewport, scrolls one viewport of blank rows into view,
+and repaints from row zero. It never uses a resize cursor report to infer an old live
+range to erase. A cursor report cannot prove ownership: a terminal can restore history
+and move the cursor before the new PTY dimensions reach the application.
 
-Width reflow can change the cursor's offset within the old frame. Clamped edge reports,
-multiple size transitions, an invalid old reservation, or an unknown physical cursor also
-cannot establish ownership. In these cases recovery moves to the last terminal row,
-scrolls one viewport of blank rows into view, and repaints in a fresh region at row zero.
-No old cells are erased; the previous viewport, including surviving old live rows, enters
-terminal history. A warning is logged and `ScreenChanged` publishes the new geometry.
-Old live frames in history are an intentional preservation tradeoff; completed messages
-are neither replayed nor duplicated by the application.
+Recovery coalesces resize bursts and waits for 500 ms without another observed dimension
+change before reserving the region. This exceeds tmux 3.6's
+[250 ms PTY notification throttle](https://github.com/tmux/tmux/blob/3.6/server-client.c#L2727).
+Layout, queued printing and physical caret/frame writes remain suspended during the quiet
+period; input and dispatch continue. Repeated drag steps normally produce one reservation
+when the drag ends, rather than a viewport of blank history on every step.
 
-A missing, invalid or abandoned cursor reply takes the same non-erasing recovery path,
-rather than stopping the application. The scheduler normally abandons unanswered requests
-after one second; recovery also has a one-second deadline while waiting to send or receive
-a query. Because CPR has no request identifiers, later resizes after any abandoned CPR
-(including a startup query) use fresh regions rather than accepting potentially late replies.
-Width changes require no CPR. A physical write failure still faults pending printing and
-suppresses further placement under the insertion failure policy above.
+Surviving old cells, including old live frames, enter terminal-owned history. Blank rows
+and stale frames in history remain an intentional cost of fresh-region recovery. Completed
+messages are never replayed. `ScreenChanged` publishes the new geometry. Short completed
+lines erase the entire destination row with CSI 2K before drawing; CSI K after drawing can
+retain an old live row's line extent and produce blank continuation rows after narrowing.
 
-A modified F3 sequence can be identical to an ordinary cursor reply. While a CPR is pending,
-the input parser prioritizes the expected response, so that key can be consumed. A first-row
-reply now selects a fresh region instead of disabling rendering. This protocol ambiguity
-also exists in startup cursor discovery.
+Resize sends no CPR, has no cursor-query timeout, and cannot consume modified F3 as a
+resize reply. Startup cursor discovery still uses CPR and retains that protocol ambiguity.
+A physical write failure still faults pending printing and suppresses placement under the
+insertion failure policy above.
 
-Layout, printing and caret updates wait for recovery; input and dispatch remain available.
-Zero-size terminals defer until positive dimensions return. Native size transitions observed
-before polling remain latched, even if dimensions return to the last polled size. Geometry
-is checked again immediately before recovery writes. Headless/custom drivers retain their
-known origin, clamped to fit the new terminal.
+Zero-size terminals defer until positive dimensions return. Observed native transitions
+remain latched even if dimensions return to the polled size. Geometry is checked again
+immediately before reservation. If the native provider becomes unavailable while a newer
+size is pending, recovery waits for polling to catch up. Headless/custom drivers retain
+their known origin, clamped to fit, and do not wait for a terminal quiet period.
 
-Active or pending raster placements also select a fresh region rather than using a cursor
-report to justify cell erasure. This does not extend the preservation guarantee to raster
-history; inline transcript preservation covers text.
-
-Disposal during pending recovery moves to the bottom of the current native viewport and
-scrolls a fresh prompt row, rather than using the old live origin. If current dimensions
-are unavailable, disposal restores modes without guessing a cursor position.
+Raster history is unsupported; fresh-region recovery does not extend the text preservation
+guarantee to active or pending raster placements. Disposal during pending recovery moves
+to the bottom of the currently reported native viewport and scrolls a fresh prompt row.
+If dimensions are unavailable, disposal restores modes without guessing a cursor position.
 
 The terminal owns resize reflow and history retention. It may move already displayed cells,
 including parts of an old live frame, into history during the resize itself; the renderer

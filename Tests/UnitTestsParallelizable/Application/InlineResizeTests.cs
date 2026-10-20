@@ -7,191 +7,68 @@ namespace ApplicationTests;
 [Collection ("Application Tests")]
 public class InlineResizeTests
 {
-    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, VirtualTimeProvider? time = null, Func<bool>? accept = null)
+    private static ApplicationImpl Create (StringBuilder bytes, out AnsiOutput output, out VirtualTimeProvider clock, VirtualTimeProvider? time = null, Func<bool>? accept = null)
     {
         output = new AnsiOutput (chunk => { bytes.Append (Encoding.UTF8.GetString (chunk)); return accept?.Invoke () ?? true; }, AppModel.Inline);
         output.SetSize (90, 25);
         ISizeMonitor sizeMonitor = Mock.Of<ISizeMonitor> (monitor => monitor.InitialSizeReceived == true);
-        VirtualTimeProvider clock = time ?? new ();
+        clock = time ?? new ();
         ApplicationImpl app = new (new AnsiComponentFactory (output: output, sizeMonitor: sizeMonitor), clock)
         {
             AppModel = AppModel.Inline,
             ForceInlinePosition = new Point (0, 15)
         };
         app.Init ();
-        ((DriverImpl)app.Driver!).AnsiRequestScheduler.Now = () => clock.Now;
         return app;
     }
 
-    private static void Reply (ApplicationImpl app, string response) =>
-        ((AnsiResponseParser<char>)((DriverImpl)app.Driver!).GetInputProcessor ().GetParser ())
-        .ProcessInput (response.Select (character => Tuple.Create (character, character)).ToArray ());
-
-    [Fact]
-    public void Resize_WaitsForCursorWithoutClearingOrPrintingAtStaleCoordinates ()
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (5, 1), Style = CursorStyle.SteadyBar });
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-
-        app.Driver!.SetScreenSize (90, 20);
-        app.LayoutAndDraw (true);
-        app.Driver.Refresh ();
-        output.SetCursor (new Cursor { Position = Point.Empty });
-
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        Assert.False (pending.IsCompleted);
-        Assert.True (output.IsInlineResizePending);
-
-        Reply (app, "\u001b[11;6R");
-        app.LayoutAndDraw ();
-
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (new Rectangle (0, 10, 90, 3), app.Screen);
-        Assert.Equal (new Point (0, 10), app.Driver.InlinePosition);
-        Assert.False (output.IsInlineResizePending);
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        Assert.Contains ("completed", bytes.ToString ());
-        app.End (owner);
-    }
-
-    [Theory]
-    [InlineData ("\u001b[2;1R", 0)]
-    [InlineData ("\u001b[?5;1R", 3)]
-    [InlineData ("\u001b[19;1R", 17)]
-    public void Resize_UsesReportedCursorAndPreviousRelativeRow (string response, int expectedOrigin)
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
-        bytes.Clear ();
-        app.Driver!.SetScreenSize (90, 20);
-
-        Reply (app, response);
-        app.LayoutAndDraw ();
-
-        Assert.Equal (expectedOrigin, app.Screen.Y);
-        Assert.Equal (90, app.Screen.Width);
-        Assert.DoesNotContain ("\n", bytes.ToString ());
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Fact]
     public void Resize_ToZero_DefersWithoutErasingOrFaultingUntilSizeReturns ()
     {
         VirtualTimeProvider time = new ();
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out _, time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
 
         app.Driver!.SetScreenSize (0, 0);
         time.Advance (TimeSpan.FromSeconds (10));
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.Empty (bytes.ToString ());
         Assert.False (pending.IsCompleted);
         Assert.True (output.IsInlinePlacementKnown);
         app.Driver.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
-        Reply (app, "\u001b[10;1R");
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Assert.True (pending.IsCompletedSuccessfully);
         app.End (owner);
     }
 
-    [Theory]
-    [InlineData (null)]
-    [InlineData ("\u001b[0;1R")]
-    [InlineData ("\u001b[1;1R")]
-    [InlineData ("\u001b[1;2R")]
-    [InlineData ("\u001b[20;1R")]
-    [InlineData ("\u001b[21;1R")]
-    [InlineData ("\u001b[10;91R")]
-    public void MissingOrInvalidPosition_ReservesFreshRegionAndCompletesPrinting (string? response)
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-        if (response is { })
-        {
-            Reply (app, response);
-        }
-        time.Advance (TimeSpan.FromSeconds (3));
-
-        app.LayoutAndDraw ();
-        output.SetCursor (new Cursor ());
-
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        app.End (owner);
-    }
-
-    [Theory]
-    [InlineData (false)]
-    [InlineData (true)]
-    public void SecondResize_UsesFreshRegionRatherThanTrustingSupersededReport (bool returnToFirstSize)
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out _);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        app.Driver.SetScreenSize (90, 18);
-        if (returnToFirstSize)
-        {
-            app.Driver.SetScreenSize (90, 20);
-        }
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-
-        Reply (app, "\u001b[10;1R");
-        app.LayoutAndDraw ();
-
-        Assert.Equal (new Rectangle (0, 1, 90, 3), app.Screen);
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Contains ("\n", bytes.ToString ());
-        app.End (owner);
-        Assert.True (pending.IsCompletedSuccessfully);
-    }
-
+    // CoPilot - GPT-6
     [Fact]
-    public void FailedResizeErase_PreservesPublishedGeometryAndFaultsPrinting ()
+    public void FailedFreshReservation_PreservesPublishedGeometryAndFaultsPrinting ()
     {
         bool accept = true;
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, accept: () => accept);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time, accept: () => accept);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
         Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
         accept = false;
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
@@ -199,28 +76,31 @@ public class InlineResizeTests
         Assert.True (pending.IsFaulted);
         accept = true;
         bytes.Clear ();
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw (true);
         output.SetCursor (new Cursor ());
         Assert.Empty (bytes.ToString ());
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Theory]
     [InlineData (false)]
     [InlineData (true)]
     public void ResizeNotification_CanEndSessionOrDisposeWithoutPrinting (bool dispose)
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out _);
+        using ApplicationImpl app = Create (bytes, out _, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
         Task pending = app.PrintAboveAsync (owner, "must not print", TestContext.Current.CancellationToken);
         app.ScreenChanged += Stop;
         bytes.Clear ();
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCanceled);
@@ -238,202 +118,34 @@ public class InlineResizeTests
         }
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void ThrowingResizeNotification_LeavesNewGeometryReadyForRepaint ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "ready" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
         EventHandler<EventArgs<Rectangle>> throwing = (_, _) => throw new InvalidOperationException ("subscriber");
         app.ScreenChanged += throwing;
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         Assert.Throws<InvalidOperationException> (() => app.LayoutAndDraw ());
 
         app.ScreenChanged -= throwing;
         Assert.Equal (90, app.Screen.Width);
         Assert.False (output.IsInlineResizePending);
         bytes.Clear ();
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Assert.Contains ("ready", bytes.ToString ());
         app.End (owner);
     }
 
-    [Fact]
-    public void RedrawBeforeResize_UsesPhysicalFrameRowInsteadOfHiddenCaretCache ()
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
-        app.LayoutAndDraw (true);
-        Assert.Null (output.GetCursor ().Position);
-        Assert.Equal (15, output.InlineCursorRow);
-
-        app.Driver!.SetScreenSize (90, 26);
-        Reply (app, "\u001b[16;1R");
-        app.LayoutAndDraw ();
-
-        Assert.Equal (15, app.Screen.Y);
-        app.End (owner);
-    }
-
-    [Fact]
-    public void SecondResizeAfterThrowingNotification_UsesRecoveredPhysicalOrigin ()
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
-        app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
-        EventHandler<EventArgs<Rectangle>> throwing = (_, _) => throw new InvalidOperationException ("subscriber");
-        app.ScreenChanged += throwing;
-        Assert.Throws<InvalidOperationException> (() => app.LayoutAndDraw ());
-        app.ScreenChanged -= throwing;
-        Assert.Equal (8, app.Screen.Y);
-        Assert.Equal (8, output.InlineCursorRow);
-        Assert.Equal (1, output.GetCursor ().Position!.Value.Y);
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        bytes.Clear ();
-
-        app.Driver.SetScreenSize (90, 18);
-        Reply (app, "\u001b[9;1R");
-        app.LayoutAndDraw ();
-
-        Assert.Equal (8, app.Screen.Y);
-        Assert.DoesNotContain ("[8;1H", bytes.ToString ());
-        app.End (owner);
-    }
-
-    [Theory]
-    [InlineData (0)]
-    [InlineData (1)]
-    [InlineData (2)]
-    public void DelayedReplyAfterAbandonmentOrTimeout_UsesFreshRegionWithoutReplacementQuery (int failure)
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        app.Driver.SetScreenSize (90, 18);
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-        if (failure == 0)
-        {
-            time.Advance (TimeSpan.FromSeconds (3));
-        }
-        else if (failure == 1)
-        {
-            ((DriverImpl)app.Driver).GetInputProcessor ().GetParser ().StopExpecting ("R", null, false);
-        }
-        else
-        {
-            time.Advance (TimeSpan.FromMilliseconds (1100));
-            ((DriverImpl)app.Driver).AnsiRequestScheduler.RunSchedule (app.Driver, force: true);
-            Assert.True (((DriverImpl)app.Driver).AnsiRequestScheduler.HasAbandonedCursorPositionRequest);
-        }
-        // A further resize must not clear the failure before it has been processed.
-        app.Driver.SetScreenSize (90, 22);
-        app.LayoutAndDraw ();
-        Reply (app, "\u001b[10;1R");
-        app.LayoutAndDraw ();
-
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Equal (1, app.Screen.Y);
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        app.End (owner);
-    }
-
-    [Fact]
-    public void ExistingCursorRequest_IsConsumedBeforeResizeRequestIsSent ()
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        bool received = false;
-        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest
-        {
-            Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => received = true
-        });
-        bytes.Clear ();
-        app.Driver.SetScreenSize (90, 20);
-        app.LayoutAndDraw ();
-        Assert.Empty (bytes.ToString ());
-        Reply (app, "\u001b[16;1R");
-        Assert.True (received);
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        app.LayoutAndDraw ();
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Reply (app, "\u001b[16;1R");
-        app.LayoutAndDraw ();
-        Assert.Equal (15, app.Screen.Y);
-        Assert.Equal (90, app.Screen.Width);
-        Assert.True (output.IsInlinePlacementKnown);
-        app.End (owner);
-    }
-
-    [Fact]
-    public void InvalidReplyAfterRevisionChange_UsesFreshRegion ()
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        app.Driver.SetScreenSize (90, 18);
-        Reply (app, "\u001b[0;1R");
-        app.Driver.SetScreenSize (90, 22);
-        bytes.Clear ();
-        app.LayoutAndDraw ();
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        app.End (owner);
-    }
-
-    [Fact]
-    public void AbandonedEarlierCursorRequest_UsesFreshRegionWithoutAcceptingLateReply ()
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest { Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => { } });
-        ((DriverImpl)app.Driver).GetInputProcessor ().GetParser ().StopExpecting ("R", null, false);
-        bytes.Clear ();
-
-        app.Driver.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
-        app.LayoutAndDraw ();
-
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Theory]
     [InlineData (0, 20)]
     [InlineData (50, 0)]
@@ -456,13 +168,15 @@ public class InlineResizeTests
         Assert.Equal (new Point (0, 15), app.Driver.InlinePosition);
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void NativeResizeBetweenPollAndCaretUpdate_SuppressesStaleWrites ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         int? physical = output.InlineCursorRow;
         Size nativeSize = new (90, 25);
@@ -476,60 +190,23 @@ public class InlineResizeTests
         Assert.Empty (bytes.ToString ());
         Assert.Equal (physical, output.InlineCursorRow);
         app.Driver.SetScreenSize (90, 20);
-        Reply (app, "\u001b[16;1R");
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
-        Assert.Equal (15, app.Screen.Y);
+        Assert.Equal (0, app.Screen.Y);
         Assert.Equal (90, app.Screen.Width);
         Assert.True (output.IsInlinePlacementKnown);
         app.End (owner);
     }
 
-    [Theory]
-    [InlineData (true)]
-    [InlineData (false)]
-    public void SupersededReplyBeyondOldBounds_DefersUntilPollingThenUsesFreshRegion (bool polled)
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        output.NativeSizeQuery = () => new Size (90, 30);
-        if (polled)
-        {
-            app.Driver.SetScreenSize (90, 30);
-        }
-        bytes.Clear ();
-        Reply (app, "\u001b[25;80R");
-        app.LayoutAndDraw ();
-        Assert.True (output.IsInlinePlacementKnown);
-        if (!polled)
-        {
-            Assert.False (pending.IsCompleted);
-            Assert.Empty (bytes.ToString ());
-            app.Driver.SetScreenSize (90, 30);
-        }
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        app.LayoutAndDraw ();
-        Reply (app, "\u001b[18;1R");
-        app.LayoutAndDraw ();
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (90, app.Screen.Width);
-        Assert.Equal (1, app.Screen.Y);
-        Assert.DoesNotContain ("\u001b[6n", bytes.ToString ());
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Fact]
     public void NativeResizeBeforeDisposal_RestoresModesWithoutStaleCursorPlacement ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         app.Begin (composer);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         output.NativeSizeQuery = () => new Size (90, 10);
         bytes.Clear ();
@@ -542,40 +219,7 @@ public class InlineResizeTests
         Assert.DoesNotContain ("\u001b[18;1H", bytes.ToString ());
     }
 
-    [Theory]
-    [InlineData (false)]
-    [InlineData (true)]
-    public void NativeResizeBeforeRecoveryErase_DefersUntilNextSizePoll (bool changesDuringRecovery)
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
-        int queries = 0;
-        output.NativeSizeQuery = () => changesDuringRecovery && ++queries == 1 ? new Size (90, 20) : new Size (90, 18);
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-        app.LayoutAndDraw ();
-        Assert.Empty (bytes.ToString ());
-        Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
-        Assert.True (output.IsInlineResizePending);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.False (pending.IsCompleted);
-
-        app.Driver.SetScreenSize (90, 18);
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        app.LayoutAndDraw ();
-        Reply (app, "\u001b[9;1R");
-        app.LayoutAndDraw ();
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (90, app.Screen.Width);
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Theory]
     [InlineData (1)]
     [InlineData (6)]
@@ -584,15 +228,17 @@ public class InlineResizeTests
     {
         VirtualTimeProvider time = new ();
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out _, time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         composer.Height = requestedHeight;
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         output.NativeSizeQuery = () => new Size (90, 20);
         bytes.Clear ();
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.Empty (bytes.ToString ());
@@ -600,47 +246,15 @@ public class InlineResizeTests
         Assert.True (output.IsInlinePlacementKnown);
         Assert.Equal (new Rectangle (0, 15, 90, 3), app.Screen);
         app.Driver!.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
-        Reply (app, "\u001b[18;1R");
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Assert.True (pending.IsCompletedSuccessfully);
         app.End (owner);
     }
 
-    [Fact]
-    public void NativeClampObservedImmediatelyBeforeErase_UsesFreshRegionAfterReturningToPolledSize ()
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
-        int queries = 0;
-        output.NativeSizeQuery = () => ++queries == 1 ? new Size (90, 20) : new Size (90, 3);
-        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
-        bytes.Clear ();
-        app.LayoutAndDraw ();
-        Assert.Empty (bytes.ToString ());
-        Assert.False (pending.IsCompleted);
-        Assert.True (output.IsInlineResizePending);
-
-        // No size event is delivered: the terminal returns to the dimensions already polled.
-        output.NativeSizeQuery = () => new Size (90, 20);
-        app.LayoutAndDraw ();
-        Assert.Empty (bytes.ToString ());
-        app.LayoutAndDraw ();
-
-        Assert.True (pending.IsCompletedSuccessfully);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Equal (1, app.Screen.Y);
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
-        Assert.DoesNotContain ("[3J", bytes.ToString ());
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Theory]
     [InlineData (0)]
     [InlineData (1)]
@@ -648,9 +262,10 @@ public class InlineResizeTests
     public void NativeSizesReturningBeforePolling_RequireRecoveryBeforeWritesResume (int surface)
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Size native = new (90, 23);
         output.NativeSizeQuery = () => native;
@@ -661,8 +276,12 @@ public class InlineResizeTests
         output.SetCursor (new Cursor { Position = Point.Empty });
         Assert.Empty (bytes.ToString ());
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
-        Assert.Contains ("\n", bytes.ToString ());
+        Assert.Empty (bytes.ToString ());
+        time.Advance (TimeSpan.FromMilliseconds (500));
+        app.LayoutAndDraw ();
+        Assert.StartsWith (FreshReservation (app.Driver!.Screen.Height), bytes.ToString ());
 
         Assert.Equal (new Rectangle (0, 0, 90, 3), app.Screen);
         Assert.False (output.IsInlineResizePending);
@@ -685,15 +304,17 @@ public class InlineResizeTests
         }
     }
 
+    // CoPilot - GPT-6
     [Theory]
     [InlineData (false)]
     [InlineData (true)]
     public void ExcessiveUnprocessedNativeTransitions_ReserveFreshRegionAndResumeWrites (bool overflowReturnsToPolledSize)
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Size native = new (90, 25);
         output.NativeSizeQuery = () => native;
@@ -710,83 +331,70 @@ public class InlineResizeTests
             output.SetCursor (new Cursor { Position = Point.Empty });
         }
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
+        time.Advance (TimeSpan.FromMilliseconds (500));
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCompletedSuccessfully);
         Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
+        Assert.StartsWith (FreshReservation (app.Driver!.Screen.Height), bytes.ToString ());
         Assert.DoesNotContain ("[2J", bytes.ToString ());
         Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
-    [Theory]
-    [InlineData (0)]
-    [InlineData (18)]
-    public void NativeSizeProviderBecomesUnavailable_KeepsAcceptedReportInvalidUntilPollingCatchesUp (int observedHeight)
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[10;1R");
-        output.NativeSizeQuery = () => new Size (90, observedHeight);
-        bytes.Clear ();
-        app.LayoutAndDraw ();
-        output.NativeSizeQuery = () => null;
-        app.LayoutAndDraw ();
-
-        Assert.Empty (bytes.ToString ());
-        Assert.True (output.IsInlineResizePending);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.Equal (15, app.Screen.Y);
-
-        app.Driver.SetScreenSize (90, observedHeight == 0 ? 20 : observedHeight);
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        app.LayoutAndDraw ();
-        Assert.Contains ("\n", bytes.ToString ());
-        Assert.Equal (0, app.Screen.Y);
-        Assert.False (output.IsInlineResizePending);
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Fact]
     public void PartialWidthResize_DoesNotEraseUnownedColumns ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         app.Screen = new Rectangle (0, 15, 40, 3);
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
+        string? reservation = null;
+        app.ScreenChanged += CaptureReservation;
+
+        void CaptureReservation (object? _, EventArgs<Rectangle> __)
+        {
+            app.ScreenChanged -= CaptureReservation;
+            reservation = bytes.ToString ();
+        }
 
         app.Driver!.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCompletedSuccessfully);
         Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
+        Assert.NotNull (reservation);
+        Assert.Equal (FreshReservation (20), reservation);
+        Assert.DoesNotContain ("[2K", reservation);
         Assert.DoesNotContain ("[2J", bytes.ToString ());
         Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void FailedFrameBeforeResize_DoesNotTrustCachedCaretOrPartiallyWrittenPosition ()
     {
         bool accept = true;
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, accept: () => accept);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time, accept: () => accept);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         output.SetCursor (new Cursor { Position = new Point (0, 1), Style = CursorStyle.SteadyBar });
         accept = false;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw (true);
         accept = true;
         Assert.Null (output.InlineCursorRow);
@@ -794,31 +402,35 @@ public class InlineResizeTests
         bytes.Clear ();
 
         app.Driver!.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCompletedSuccessfully);
         Assert.True (output.IsInlinePlacementKnown);
-        Assert.Contains ("\n", bytes.ToString ());
+        Assert.StartsWith (FreshReservation (app.Driver!.Screen.Height), bytes.ToString ());
         Assert.DoesNotContain ("[2J", bytes.ToString ());
         Assert.DoesNotContain ("[3J", bytes.ToString ());
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void ResizeInDrawingCallback_StopsStaleFrameBeforeDriverRefresh ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         composer.DrawingContent += Resize;
         bytes.Clear ();
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw (true);
 
         Assert.True (output.IsInlineResizePending);
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
+        Assert.Empty (bytes.ToString ());
         app.End (owner);
 
         void Resize (object? _, DrawEventArgs __)
@@ -828,83 +440,17 @@ public class InlineResizeTests
         }
     }
 
-    [Theory]
-    [InlineData (false)]
-    [InlineData (true)]
-    public void PendingRasterDuringResize_UsesFreshRegionInsteadOfErasingOldCells (bool queuedAfterResize)
-    {
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        DriverImpl driver = (DriverImpl)app.Driver!;
-        if (queuedAfterResize)
-        {
-            driver.SetScreenSize (90, 20);
-            Reply (app, "\u001b[15;1R");
-        }
-
-        driver.GetOutputBuffer ().AddRasterImage (new RasterImageCommand
-        {
-            Id = "image", DestinationCells = new Rectangle (0, 0, 1, 1), Pixels = new Color [1, 1]
-        });
-        bytes.Clear ();
-        if (!queuedAfterResize)
-        {
-            driver.SetScreenSize (90, 20);
-        }
-
-        app.LayoutAndDraw ();
-
-        string writes = bytes.ToString ();
-        Assert.Contains ("\u001b[20;1H" + new string ('\n', 20), writes);
-        Assert.DoesNotContain ("[2K", writes [..writes.IndexOf ('\n')]);
-        Assert.Equal (0, app.Screen.Y);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.False (output.IsInlineResizePending);
-        app.End (owner);
-    }
-
+    // CoPilot - GPT-6
     [Fact]
-    public void ThrottledCursorQuery_RetriesWithoutQueuingDuplicateRequests ()
-    {
-        VirtualTimeProvider time = new ();
-        StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output, time);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
-        SessionToken owner = app.Begin (composer)!;
-        app.LayoutAndDraw ();
-        app.Driver!.QueueAnsiRequest (new AnsiEscapeSequenceRequest { Request = "\u001b[6n", Terminator = "R", ResponseReceived = _ => { } });
-        Reply (app, "\u001b[16;1R");
-        bytes.Clear ();
-
-        app.Driver.SetScreenSize (90, 20);
-        app.LayoutAndDraw ();
-        Assert.Empty (bytes.ToString ());
-        Assert.True (output.IsInlineResizePending);
-        Assert.DoesNotContain (((DriverImpl)app.Driver).AnsiRequestScheduler.QueuedRequests, request => request.Terminator == "R");
-        time.Advance (TimeSpan.FromMilliseconds (200));
-        app.LayoutAndDraw ();
-        Assert.Equal ("\u001b[6n", bytes.ToString ());
-        Reply (app, "\u001b[15;1R");
-        app.LayoutAndDraw ();
-
-        Assert.False (output.IsInlineResizePending);
-        Assert.Equal (14, app.Screen.Y);
-        app.End (owner);
-    }
-
-    [Fact]
-    public void NativeTransitionsReturningDuringFinalGuard_DeferPlannedEraseAndUseFreshRegion ()
+    public void NativeTransitionsReturningDuringFinalGuard_DeferPlannedReservationAndUseFreshRegion ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 3 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[15;1R");
         int reads = 0;
         bool nested = false;
         Size native = new (90, 20);
@@ -925,11 +471,13 @@ public class InlineResizeTests
         };
         bytes.Clear ();
 
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.Empty (bytes.ToString ());
         Assert.Equal (15, app.Screen.Y);
         Assert.True (output.IsInlineResizePending);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Assert.Contains ("\u001b[20;1H" + new string ('\n', 20), bytes.ToString ());
         Assert.Equal (0, app.Screen.Y);
@@ -937,90 +485,142 @@ public class InlineResizeTests
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Theory]
-    [InlineData (0, 3)]
-    [InlineData (22, 3)]
-    [InlineData (24, 1)]
-    [InlineData (0, 25)]
-    public void WidthReflow_ReservesFreshRegionWithoutCursorQueryEvenAtEdges (int origin, int height)
+    [InlineData (0, 3, 50, 25)]
+    [InlineData (22, 3, 50, 25)]
+    [InlineData (24, 1, 50, 25)]
+    [InlineData (0, 25, 50, 25)]
+    [InlineData (15, 3, 90, 24)]
+    [InlineData (15, 3, 90, 30)]
+    [InlineData (24, 1, 90, 1)]
+    [InlineData (0, 25, 90, 1)]
+    public void EveryResize_ReservesWholeFreshViewportWithoutCursorQuery (int origin, int height, int width, int rows)
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
         app.ForceInlinePosition = new Point (0, origin);
         using Runnable composer = new () { Width = Dim.Fill (), Height = height, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
 
-        app.Driver!.SetScreenSize (50, 25);
+        app.Driver!.SetScreenSize (width, rows);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
         Assert.True (pending.IsCompletedSuccessfully);
-        Assert.Equal (50, app.Screen.Width);
-        Assert.Equal (height, app.Screen.Height);
+        Assert.Equal (width, app.Screen.Width);
+        Assert.Equal (Math.Min (height, rows), app.Screen.Height);
         Assert.True (output.IsInlinePlacementKnown);
         Assert.False (output.IsInlineResizePending);
-        Assert.Contains ("\u001b[25;1H" + new string ('\n', 25) + "\u001b[1;1H", bytes.ToString ());
+        Assert.StartsWith (FreshReservation (rows), bytes.ToString ());
         Assert.DoesNotContain ("\u001b[6n", bytes.ToString ());
         Assert.DoesNotContain ("[2K", bytes.ToString () [..bytes.ToString ().IndexOf ('\n')]);
         app.End (owner);
     }
 
+    private static string FreshReservation (int rows) =>
+        EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes + EscSeqUtils.CSI_SetCursorPosition (rows, 1)
+        + new string ('\n', rows) + EscSeqUtils.CSI_SetCursorPosition (1, 1);
+
+    // CoPilot - GPT-6
     [Fact]
-    public void HeightShrink_ClampedCaretReservesFreshRegionWithoutPendingPrint ()
+    public void ResizeBurst_DefersAllWritesUntilQuietThenReservesOnce ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
-        app.ForceInlinePosition = new Point (0, 22);
-        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "still live" };
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 3, Text = "live" };
         SessionToken owner = app.Begin (composer)!;
         app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (0, 2), Style = CursorStyle.SteadyBar });
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
         bytes.Clear ();
+        app.Driver!.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (499));
+        app.LayoutAndDraw ();
+        output.SetCursor (new Cursor { Position = Point.Empty });
+        app.Driver.Refresh ();
+        Assert.Empty (bytes.ToString ());
+        Assert.False (pending.IsCompleted);
 
-        app.Driver!.SetScreenSize (90, 24);
-        Reply (app, "\u001b[24;1R");
+        app.Driver.SetScreenSize (90, 22);
+        time.Advance (TimeSpan.FromMilliseconds (499));
+        app.LayoutAndDraw ();
+        Assert.Empty (bytes.ToString ());
+        time.Advance (TimeSpan.FromMilliseconds (1));
         app.LayoutAndDraw ();
 
-        Assert.Equal (new Rectangle (0, 0, 90, 3), app.Screen);
-        Assert.Contains ("still live", bytes.ToString ());
-        Assert.True (output.IsInlinePlacementKnown);
+        Assert.StartsWith (FreshReservation (22), bytes.ToString ());
+        Assert.Equal (1, bytes.ToString ().Split (FreshReservation (22)).Length - 1);
+        Assert.Equal (1, bytes.ToString ().Split ("completed").Length - 1);
+        Assert.True (pending.IsCompletedSuccessfully);
         Assert.False (output.IsInlineResizePending);
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Fact]
-    public void Resize_RecoversNegativeOriginAndRepaintsVisiblePopover ()
+    public void ZeroHeightFreshRegion_DefersPrintingUntilRunnableGrows ()
     {
         StringBuilder bytes = new ();
-        using ApplicationImpl app = Create (bytes, out AnsiOutput output);
+        using ApplicationImpl app = Create (bytes, out AnsiOutput output, out VirtualTimeProvider time);
+        using Runnable composer = new () { Width = Dim.Fill (), Height = 0 };
+        SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
+        app.LayoutAndDraw ();
+        app.Screen = new Rectangle (0, 15, 90, 0);
+        Task pending = app.PrintAboveAsync (owner, "completed", TestContext.Current.CancellationToken);
+        bytes.Clear ();
+
+        app.Driver!.SetScreenSize (90, 20);
+        time.Advance (TimeSpan.FromMilliseconds (500));
+        app.LayoutAndDraw ();
+
+        Assert.StartsWith (FreshReservation (20), bytes.ToString ());
+        Assert.Equal (new Rectangle (0, 0, 90, 0), app.Screen);
+        Assert.False (pending.IsCompleted);
+        Assert.False (output.IsInlineResizePending);
+        composer.Height = 3;
+        time.Advance (TimeSpan.FromMilliseconds (500));
+        app.LayoutAndDraw ();
+        Assert.True (pending.IsCompletedSuccessfully);
+        app.End (owner);
+    }
+
+    // CoPilot - GPT-6
+    [Fact]
+    public void FreshResize_RepaintsVisiblePopover ()
+    {
+        StringBuilder bytes = new ();
+        using ApplicationImpl app = Create (bytes, out _, out VirtualTimeProvider time);
         using Runnable composer = new () { Width = Dim.Fill (), Height = 6 };
         SessionToken owner = app.Begin (composer)!;
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
         using Popover<TextField, string> popover = new () { Width = 10, Height = 2 };
         app.Popovers!.Register (popover);
         app.Popovers.Show (popover);
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
-        output.SetCursor (new Cursor { Position = new Point (0, 5), Style = CursorStyle.SteadyBar });
         int draws = 0;
         popover.DrawingContent += (_, _) => draws++;
         bytes.Clear ();
 
         app.Driver!.SetScreenSize (90, 20);
-        Reply (app, "\u001b[3;1R");
+        time.Advance (TimeSpan.FromMilliseconds (500));
         app.LayoutAndDraw ();
 
+        Assert.StartsWith (FreshReservation (20), bytes.ToString ());
         Assert.Equal (0, app.Screen.Y);
-        Assert.Equal (6, app.Screen.Height);
         Assert.True (draws > 0);
-        Assert.True (output.IsInlinePlacementKnown);
-        Assert.DoesNotContain ("[2J", bytes.ToString ());
         app.Popovers.Hide (popover);
         app.Popovers.DeRegister (popover);
         app.End (owner);
     }
 
+    // CoPilot - GPT-6
     [Fact]
     public void HeadlessResize_RetainsOriginAndClampsRegionWithoutWholeDisplayErase ()
     {

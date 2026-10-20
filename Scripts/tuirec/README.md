@@ -263,10 +263,21 @@ one current frame.
 
 To verify actual terminal reflow and cursor clamping on Linux or macOS, install `tmux`, build
 ScenarioRunner in Release, and run `python3 Scripts/tuirec/verify-inline-resize-tmux.py`.
-This creates an isolated tmux server, tests one-row height shrinks and repeated width changes
-with a seven-row preview, verifies input-driven repaint after every resize, and checks ordered,
-unique completed messages and clean exit. It writes snapshots with an explicit `passed` field
-to `artifacts/InlineResize-tmux.json`. Pass `--dll PATH` or `--evidence PATH` to override paths.
+This creates an isolated tmux server with six shell sentinels and tests 30 height changes at
+40 ms intervals during streaming, after output settles, and with a seven-row preview. The burst
+loop injects no input/capture waits between changes. It checks all 24 messages and six shell lines
+after each phase, input-driven repaint, preview commitment, clean exit, and actual tmux line-extent
+behavior after CSI 2K. Snapshots include history/blank-row counts; evidence records the seed,
+resize timestamps and history growth for each burst, with an explicit `passed` field.
+
+```bash
+python3 Scripts/tuirec/verify-inline-resize-tmux.py --seed 7
+python3 Scripts/tuirec/verify-inline-resize-tmux.py --seed 7 --burst-mode width --burst-steps 40
+python3 Scripts/tuirec/verify-inline-resize-tmux.py --seed 7 --burst-mode mixed --burst-ms 60
+```
+
+Evidence defaults to `artifacts/InlineResize-tmux.json`. Pass `--dll PATH` or `--evidence PATH`
+to select a build or retain separate runs. Repeat seeds 0 through 9 to sweep different bursts.
 
 To check the Inline Transcript scenario's history, keyboard editing, and F2 mouse toggle,
 build ScenarioRunner in Release, install `pyte`, and run:

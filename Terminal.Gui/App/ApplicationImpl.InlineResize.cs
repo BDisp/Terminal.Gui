@@ -1,9 +1,11 @@
-using System.Text.RegularExpressions;
-
 namespace Terminal.Gui.App;
 
 internal partial class ApplicationImpl
 {
+    // tmux updates its grid before its throttled PTY resize notification (250 ms in 3.6).
+    // Coalesce drag bursts before reserving a fresh region, including frames, printing and caret writes.
+    private static readonly TimeSpan InlineResizeQuietPeriod = TimeSpan.FromMilliseconds (500);
+
     private InlineResize? _inlineResize;
 
     private void BeginInlineResize (Rectangle region, Size size, bool observePolledSize = true)
@@ -40,7 +42,7 @@ internal partial class ApplicationImpl
         if (_inlineResize is { } pending)
         {
             ConsumeInlineSizeObservations (pending, output);
-            pending.ObserveSize (size);
+            pending.ObserveSize (size, _timeProvider.Now);
             if (pending.Size == size)
             {
                 return;
@@ -54,115 +56,21 @@ internal partial class ApplicationImpl
         {
             Region = region,
             Size = size,
-            CursorOffset = output.InlineCursorRow.GetValueOrDefault () - region.Y,
-            ObservedSize = output.InlineCursorSize,
-            OriginalSize = output.InlineCursorSize,
-            Generation = _inlineOutputGeneration,
-            NeedsFreshRegion = !_inlineScreenHasValidOwnership || output.InlineCursorRow is null || output.InlineCursorRow < region.Y
-                               || output.InlineCursorRow >= region.Y + Math.Max (1, region.Height)
-                               || output.HasInlineRasterState (driver.GetOutputBuffer ())
+            ObservedSize = size,
+            LastChanged = _timeProvider.Now,
+            Generation = _inlineOutputGeneration
         };
         ConsumeInlineSizeObservations (resize, output);
         if (observePolledSize)
         {
-            resize.ObserveSize (size);
+            resize.ObserveSize (size, _timeProvider.Now);
         }
 
         _inlineResize = resize;
         output.IsInlineResizePending = true;
-        if (!resize.NeedsFreshRegion && size.Width > 0 && size.Height > 0 && resize.ObservedSize == size)
-        {
-            QueryInlineResizeCursor (resize, driver);
-        }
     }
 
-    private void QueryInlineResizeCursor (InlineResize resize, DriverImpl driver)
-    {
-        if (resize.NeedsFreshRegion || driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
-        {
-            resize.NeedsFreshRegion = true;
-            return;
-        }
-
-        Size size = resize.Size;
-        int revision = resize.Revision;
-        resize.Started ??= _timeProvider.Now;
-        if (driver.GetInputProcessor ().GetParser ().IsExpecting ("R", null))
-        {
-            return;
-        }
-
-        resize.QueryPending = true;
-        bool sent = driver.AnsiRequestScheduler.TrySendImmediately (driver, new AnsiEscapeSequenceRequest
-        {
-            Request = EscSeqUtils.CSI_RequestCursorPositionReport.Request,
-            Terminator = EscSeqUtils.CSI_RequestCursorPositionReport.Terminator,
-            ResponseReceived = response =>
-            {
-                if (!ReferenceEquals (_inlineResize, resize))
-                {
-                    return;
-                }
-
-                resize.QueryPending = false;
-                if (driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest)
-                {
-                    resize.NeedsFreshRegion = true;
-                    return;
-                }
-
-                Match match = Regex.Match (response ?? string.Empty, @"^\x1b\[\??(\d+);(\d+)R$");
-                if (!match.Success || !int.TryParse (match.Groups [1].Value, out int row) || row <= 0
-                    || !int.TryParse (match.Groups [2].Value, out int column) || column <= 0)
-                {
-                    resize.NeedsFreshRegion = true;
-                    return;
-                }
-
-                // A top-edge report cannot establish how much of the live reservation survived.
-                // Keep this evidence even if the query has already been superseded.
-                if (row == 1 && size.Height != resize.OriginalSize.Height)
-                {
-                    resize.NeedsFreshRegion = true;
-                    return;
-                }
-
-                bool nativeChanged = driver.GetOutput () is AnsiOutput output && ObserveNativeInlineResizeSize (resize, output);
-                if (resize.Revision != revision || nativeChanged)
-                {
-                    resize.Started = null;
-                    return;
-                }
-
-                // At the bottom edge CPR cannot distinguish scrolling from a clamped cursor.
-                // Even offset zero may point at transcript when the entire live region was clipped.
-                if (row > size.Height || column > size.Width
-                    || row == size.Height && size.Height != resize.OriginalSize.Height)
-                {
-                    resize.NeedsFreshRegion = true;
-                    return;
-                }
-
-                resize.Row = row - 1;
-            },
-            Abandoned = () =>
-            {
-                if (!ReferenceEquals (_inlineResize, resize))
-                {
-                    return;
-                }
-
-                resize.QueryPending = false;
-                resize.NeedsFreshRegion = true;
-            }
-        });
-        if (!sent)
-        {
-            resize.QueryPending = false;
-        }
-    }
-
-    private static bool ObserveNativeInlineResizeSize (InlineResize resize, AnsiOutput output)
+    private bool ObserveNativeInlineResizeSize (InlineResize resize, AnsiOutput output)
     {
         int revision = resize.Revision;
         Size? native = output.QueryNativeInlineSize ();
@@ -170,18 +78,16 @@ internal partial class ApplicationImpl
         return revision != resize.Revision || resize.ObservedSize != resize.Size || native is { } size && size != resize.Size;
     }
 
-    private static void ConsumeInlineSizeObservations (InlineResize resize, AnsiOutput output)
+    private void ConsumeInlineSizeObservations (InlineResize resize, AnsiOutput output)
     {
         while (output.TryDequeueInlineSize (out Size size))
         {
-            resize.ObserveSize (size);
+            resize.ObserveSize (size, _timeProvider.Now);
         }
-
-        resize.NeedsFreshRegion |= output.InlineSizeObservationOverflow;
     }
 
-    // Called after size polling, before layout/printing. CPR callbacks only record a position:
-    // user callbacks and a second physical resize must not publish stale geometry mid-input dispatch.
+    // Called after size polling, before layout/printing. A cursor report cannot prove which
+    // old rows remain live: terminal grid changes and PTY size notifications are not atomic.
     private bool CompleteInlineResize ()
     {
         if (Driver is not DriverImpl driver)
@@ -209,57 +115,23 @@ internal partial class ApplicationImpl
         }
 
         bool nativeChanged = driver.GetOutput () is AnsiOutput currentOutput && ObserveNativeInlineResizeSize (resize, currentOutput);
-        bool timedOut = resize.Row is null && resize.Started is { } started && _timeProvider.Now - started > TimeSpan.FromSeconds (1);
-        resize.NeedsFreshRegion |= timedOut || driver.AnsiRequestScheduler.HasAbandonedCursorPositionRequest;
-        // Out-of-band graphics do not have a text-only ownership proof. Preserve the viewport;
-        // raster history itself remains outside the inline text preservation guarantee.
-        resize.NeedsFreshRegion |= driver.GetOutput () is AnsiOutput rasterOutput && rasterOutput.HasInlineRasterState (driver.GetOutputBuffer ());
         if (resize.Size.Width <= 0 || resize.Size.Height <= 0)
         {
             return false;
         }
 
-        if (nativeChanged)
+        if (nativeChanged || _timeProvider.Now - resize.LastChanged < InlineResizeQuietPeriod)
         {
             return false;
         }
 
-        if (!resize.NeedsFreshRegion && resize.Row is null)
-        {
-            if (!resize.QueryPending)
-            {
-                QueryInlineResizeCursor (resize, driver);
-            }
-
-            return false;
-        }
-
-        // Never move ownership upward to fit the old height. Erase surviving rows first;
-        // ordinary growth can then scroll the cleared region to reserve any missing height.
-        int recoveredOrigin = resize.Row.GetValueOrDefault () - resize.CursorOffset;
-        int origin = resize.NeedsFreshRegion ? 0 : Math.Max (0, recoveredOrigin);
-        int height = resize.NeedsFreshRegion
-                         ? Math.Clamp (resize.Region.Height, 0, resize.Size.Height)
-                         : Math.Min (Math.Max (0, resize.Region.Height + Math.Min (0, recoveredOrigin)), resize.Size.Height - origin);
-        StringBuilder erase = new (EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes);
-        if (resize.NeedsFreshRegion)
-        {
-            // Reflow/clamping cannot prove ownership. Preserve the entire viewport in history,
-            // including any old live rows, and reserve a new blank region without erasing cells.
-            erase.Append (EscSeqUtils.CSI_SetCursorPosition (resize.Size.Height, 1));
-            erase.Append ('\n', resize.Size.Height);
-        }
-        else
-        {
-            for (int ownedRow = origin; ownedRow < origin + height; ownedRow++)
-            {
-                erase.Append (EscSeqUtils.CSI_SetCursorPosition (ownedRow + 1, 1));
-                erase.Append (EscSeqUtils.CSI + "2K");
-            }
-        }
-
-        erase.Append (EscSeqUtils.CSI_SetCursorPosition (origin + 1, 1));
-        if (!WriteInlineMovement (erase.ToString (), resize.Size))
+        // Preserve every surviving old cell, including old live frames. Never erase a range
+        // inferred from a cursor report; tmux can restore history before reporting its new size.
+        int height = Math.Clamp (resize.Region.Height, 0, resize.Size.Height);
+        string reserve = EscSeqUtils.OSC_EndHyperlink () + EscSeqUtils.CSI_ResetAttributes
+                         + EscSeqUtils.CSI_SetCursorPosition (resize.Size.Height, 1)
+                         + new string ('\n', resize.Size.Height) + EscSeqUtils.CSI_SetCursorPosition (1, 1);
+        if (!WriteInlineMovement (reserve, resize.Size))
         {
             return false;
         }
@@ -268,14 +140,14 @@ internal partial class ApplicationImpl
         if (driver.GetOutput () is AnsiOutput ansiOutput)
         {
             ansiOutput.CompleteInlineSizeRecovery ();
-            ansiOutput.InlineCursorRow = origin;
+            ansiOutput.InlineCursorRow = 0;
             ansiOutput.IsInlineResizePending = false;
             ansiOutput.ResetInlineTextState ();
         }
 
-        _screen = new Rectangle (0, origin, resize.Size.Width, height);
+        _screen = new Rectangle (0, 0, resize.Size.Width, height);
         _inlineScreenHasValidOwnership = true;
-        driver.InlinePosition = new Point (0, origin);
+        driver.InlinePosition = Point.Empty;
         driver.ResizeOutputBuffer (resize.Size.Width, height);
         _inlineScreenSized = height > 0;
         foreach (View runnable in SessionStack?.Select (token => token.Runnable).OfType<View> () ?? [])
@@ -291,11 +163,6 @@ internal partial class ApplicationImpl
         }
 
         driver.SetCursorNeedsUpdate (true);
-        if (resize.NeedsFreshRegion)
-        {
-            Logging.Warning ("Inline resize preserved the previous viewport in history and reserved a fresh live region.");
-        }
-
         RaiseScreenChangedEvent (Screen);
         return Initialized && !_dispatchStopping && HasRunningSession && Driver == driver && !InlinePlacementLost && _inlineResize is null;
     }
@@ -304,17 +171,12 @@ internal partial class ApplicationImpl
     {
         internal Rectangle Region { get; init; }
         internal Size Size { get; set; }
-        internal int CursorOffset { get; init; }
         internal long Generation { get; init; }
-        internal DateTime? Started { get; set; }
-        internal int? Row { get; set; }
-        internal bool QueryPending { get; set; }
-        internal bool NeedsFreshRegion { get; set; }
-        internal Size OriginalSize { get; init; }
         internal int Revision { get; set; }
         internal Size ObservedSize { get; set; }
+        internal DateTime LastChanged { get; set; }
 
-        internal void ObserveSize (Size size)
+        internal void ObserveSize (Size size, DateTime now)
         {
             if (size == ObservedSize)
             {
@@ -323,16 +185,7 @@ internal partial class ApplicationImpl
 
             ObservedSize = size;
             Revision++;
-            Row = null;
-            if (!QueryPending)
-            {
-                Started = null;
-            }
-
-            // Reflow can change the cursor's offset within the live frame. Multiple changes
-            // can hide earlier clamping, even if the final CPR is interior. Neither case
-            // establishes ownership, so preserve all rows instead of guessing their extent.
-            NeedsFreshRegion |= Revision > 1 || size.Width != OriginalSize.Width;
+            LastChanged = now;
         }
     }
 }

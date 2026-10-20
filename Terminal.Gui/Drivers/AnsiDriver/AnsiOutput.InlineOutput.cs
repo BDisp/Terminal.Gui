@@ -86,6 +86,8 @@ public partial class AnsiOutput
                 }
                 StringBuilder output = new (EscSeqUtils.CSI_SetCursorPosition (start + i + 1, 1));
                 output.Append (EscSeqUtils.CSI_ResetAttributes);
+                // Reset the terminal's stored line extent before replacing a live-frame row.
+                output.Append (EscSeqUtils.CSI + "2K");
                 Attribute? previous = null;
                 foreach (InlineOutputSpan span in rows.Current.Spans)
                 {
@@ -101,12 +103,6 @@ public partial class AnsiOutput
                     output.Append (span.Text);
                 }
                 output.Append (EscSeqUtils.CSI_ResetAttributes);
-                if (rows.Current.Columns < terminal.Width)
-                {
-                    // Clear the suffix without turning blank padding into reflowable text.
-                    output.Append (EscSeqUtils.CSI + "K");
-                }
-
                 // Explicit CUP cancels pending autowrap even after an exact-width bottom row.
                 output.Append (EscSeqUtils.CSI_SetCursorPosition (start + i + 1, 1));
                 Write (output.ToString ().AsSpan ());

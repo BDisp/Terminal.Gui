@@ -450,7 +450,6 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
             {
                 return;
             }
-            InlineCursorSize = _consoleSize;
             if (!HasInlineSizeObservations)
             {
                 _lastInlineObservedSize = _consoleSize;
@@ -458,7 +457,6 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         }
     }
 
-    internal Size InlineCursorSize { get; private set; }
     internal bool InlineSizeTrackingEnabled { get; set; }
     private Size? _lastInlineObservedSize;
     private readonly Queue<Size> _inlineSizeObservations = [];
@@ -521,6 +519,7 @@ public partial class AnsiOutput : OutputBase, IOutput, IInlineOutput
         {
             return;
         }
+
         try
         {
             if (!cursor.IsVisible)

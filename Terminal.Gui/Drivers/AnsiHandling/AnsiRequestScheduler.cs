@@ -18,9 +18,6 @@ public class AnsiRequestScheduler
     /// </summary>
     internal Func<DateTime> Now { get; set; }
 
-    // CPR responses carry no request id. Once one is abandoned, a future reply is ambiguous.
-    internal bool HasAbandonedCursorPositionRequest { get; private set; }
-
     private readonly HashSet<Tuple<AnsiEscapeSequenceRequest, DateTime>> _queuedRequests = new ();
     private readonly object _lockQueuedRequests = new ();
 
@@ -87,8 +84,6 @@ public class AnsiRequestScheduler
     /// <param name="request"></param>
     /// <returns><see langword="true"/> if request was sent immediately. <see langword="false"/> if it was queued.</returns>
     public bool SendOrSchedule (IDriver? driver, AnsiEscapeSequenceRequest request) => SendOrSchedule (driver, request, true);
-
-    internal bool TrySendImmediately (IDriver driver, AnsiEscapeSequenceRequest request) => SendOrSchedule (driver, request, false);
 
     private bool SendOrSchedule (IDriver? driver, AnsiEscapeSequenceRequest request, bool addToQueue)
     {
@@ -216,18 +211,7 @@ public class AnsiRequestScheduler
         //Logging.Trace ($"AnsiRequestScheduler.Send: Terminator='{r.Terminator}' Value='{r.Value ?? "<null>"}'");
 
         _lastSend.AddOrUpdate ((r.Terminator!, r.Value), _ => Now (), (_, _) => Now ());
-        Action? abandoned = r.Abandoned;
-
-        if (r.Terminator?.Contains ('R') == true)
-        {
-            abandoned = () =>
-            {
-                HasAbandonedCursorPositionRequest = true;
-                r.Abandoned?.Invoke ();
-            };
-        }
-
-        _parser.ExpectResponse (r.Terminator, r.Value, r.ResponseReceived, abandoned, false);
+        _parser.ExpectResponse (r.Terminator, r.Value, r.ResponseReceived, r.Abandoned, false);
         r.Send (driver);
     }
 

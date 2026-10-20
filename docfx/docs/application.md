@@ -1009,11 +1009,11 @@ When content is added at runtime (e.g. items appended to a `ListView`), `LayoutA
 
 ### Resize Handling
 
-On terminal resize, the ANSI driver preserves completed output and repaints the live region without
-clearing the display or scrollback. A single height change can recover the old origin using a cursor
-report. Width reflow, clamping or uncertain recovery instead scrolls the previous viewport into
-history and reserves a fresh live region at row zero. Old live frames may remain in history;
-completed messages are not replayed. Missing cursor reports do not stop rendering.
+On terminal resize, the ANSI driver coalesces dimension changes until they have been quiet for
+500 ms, scrolls the previous viewport into history, and reserves a fresh live region at row zero.
+It does not clear the display/scrollback or use a cursor report to infer which old rows it may
+erase. Old live frames and blank rows can remain in history; completed messages are not replayed.
+Drawing, printing and caret updates pause during recovery; input and dispatch continue.
 See [Terminal resize](inline-output.md#terminal-resize) for recovery and failure details.
 
 ### Output Buffer
