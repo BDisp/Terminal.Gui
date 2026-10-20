@@ -1,11 +1,12 @@
 using System.Text;
 using Markdig;
+using UnitTests;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
 namespace ViewsTests.Markdown;
 
 // CoPilot - GPT-6
-public class MarkdownParsedContentTests
+public class MarkdownParsedContentTests : TestDriverBase
 {
     [Theory]
     [InlineData ("``a`b``", "a`b")]
@@ -17,11 +18,11 @@ public class MarkdownParsedContentTests
     [InlineData ("a\\|b", "a|b")]
     public void Table_Cell_Renders_Parsed_Text (string source, string expected)
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, source, out TgMarkdown markdown);
+        using IDriver driver = CreateTestDriver (60, 20);
+        using TgMarkdown markdown = CreateTable (source, driver);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
 
-        Assert.Equal ($"│ {expected}", ReadRow (app.Driver!, table, 3).TrimEnd (' ', '│'));
+        Assert.Equal ($"│ {expected}", ReadRow (driver, table, 3).TrimEnd (' ', '│'));
         Assert.Equal (5, table.RenderedHeight);
     }
 
@@ -33,11 +34,11 @@ public class MarkdownParsedContentTests
     [InlineData ("[**bold**](https://example.com)", TextStyle.Bold | TextStyle.Underline)]
     public void Table_Cell_Preserves_Text_Style (string source, TextStyle expected)
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, source, out TgMarkdown markdown);
+        using IDriver driver = CreateTestDriver (60, 20);
+        using TgMarkdown markdown = CreateTable (source, driver);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
         Point position = table.ViewportToScreen (new Point (2, 3));
-        TextStyle actual = app.Driver!.Contents! [position.Y, position.X].Attribute!.Value.Style;
+        TextStyle actual = driver.Contents! [position.Y, position.X].Attribute!.Value.Style;
 
         Assert.Equal (expected, actual & expected);
     }
@@ -45,11 +46,11 @@ public class MarkdownParsedContentTests
     [Fact]
     public void Table_Nested_Emphasis_Combines_Styles_At_Inner_Text ()
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, "**bold *inner***", out TgMarkdown markdown);
+        using IDriver driver = CreateTestDriver (60, 20);
+        using TgMarkdown markdown = CreateTable ("**bold *inner***", driver);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
         Point position = table.ViewportToScreen (new Point (7, 3));
-        TextStyle actual = app.Driver!.Contents! [position.Y, position.X].Attribute!.Value.Style;
+        TextStyle actual = driver.Contents! [position.Y, position.X].Attribute!.Value.Style;
 
         Assert.Equal (TextStyle.Bold | TextStyle.Italic, actual & (TextStyle.Bold | TextStyle.Italic));
     }
@@ -57,8 +58,7 @@ public class MarkdownParsedContentTests
     [Fact]
     public void Table_Text_Model_Uses_Safe_Code_Delimiters ()
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, "``a`b``", out TgMarkdown markdown);
+        using TgMarkdown markdown = CreateTable ("``a`b``");
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
 
         Assert.Equal ("``a`b``", table.TableData.Rows [0] [0]);
@@ -119,13 +119,16 @@ public class MarkdownParsedContentTests
     [Fact]
     public void TableData_Reassignment_Replaces_Parsed_Content ()
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, "~~old~~", out TgMarkdown markdown);
+        using IDriver driver = CreateTestDriver (60, 20);
+        using TgMarkdown markdown = CreateTable ("~~old~~", driver);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
         table.TableData = new (["Cell"], [Alignment.Start], [ ["**new**"]]);
-        app.LayoutAndDraw ();
+        table.Layout ();
+        table.SetNeedsDraw ();
+        table.SetClipToScreen ();
+        table.Draw ();
 
-        Assert.Equal ("│ new", ReadRow (app.Driver!, table, 3).TrimEnd (' ', '│'));
+        Assert.Equal ("│ new", ReadRow (driver, table, 3).TrimEnd (' ', '│'));
     }
 
     [Theory]
@@ -136,18 +139,21 @@ public class MarkdownParsedContentTests
     [InlineData ("CAUTION")]
     public void Alert_Kind_Is_Visible_And_Bold (string kind)
     {
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        app.Driver!.SetScreenSize (50, 10);
-        using Runnable window = new () { Width = Dim.Fill (), Height = Dim.Fill (), BorderStyle = LineStyle.None };
-        TgMarkdown markdown = new () { Text = $"> [!{kind}]\n> Critical **action**", Width = Dim.Fill (), Height = Dim.Fill () };
-        window.Add (markdown);
-        app.Begin (window);
-        app.LayoutAndDraw ();
+        using IDriver driver = CreateTestDriver (50, 10);
+        using TgMarkdown markdown = new ()
+        {
+            Driver = driver,
+            Text = $"> [!{kind}]\n> Critical **action**",
+            Width = 50,
+            Height = 10
+        };
+        markdown.Layout ();
+        markdown.Draw ();
 
-        Assert.StartsWith ($"> {kind}", ReadRow (app.Driver, markdown, 0));
-        Assert.StartsWith ("> Critical action", ReadRow (app.Driver, markdown, 1));
+        Assert.StartsWith ($"> {kind}", ReadRow (driver, markdown, 0));
+        Assert.StartsWith ("> Critical action", ReadRow (driver, markdown, 1));
         Point position = markdown.ViewportToScreen (new Point (2, 0));
-        Assert.True (app.Driver.Contents! [position.Y, position.X].Attribute!.Value.Style.HasFlag (TextStyle.Bold));
+        Assert.True (driver.Contents! [position.Y, position.X].Attribute!.Value.Style.HasFlag (TextStyle.Bold));
     }
 
     [Fact]
@@ -160,6 +166,21 @@ public class MarkdownParsedContentTests
 
         Assert.Contains ("> > WARNING", plain);
         Assert.Contains ("> > nested", plain);
+    }
+
+    private static TgMarkdown CreateTable (string source, IDriver? driver = null)
+    {
+        TgMarkdown markdown = new ()
+        {
+            Driver = driver,
+            Text = $"| Cell |\n| --- |\n| {source} |",
+            Width = 60,
+            Height = 20
+        };
+        markdown.Layout ();
+        markdown.Draw ();
+
+        return markdown;
     }
 
     private static Runnable BeginTable (IApplication app, string source, out TgMarkdown markdown, int width = 60)
