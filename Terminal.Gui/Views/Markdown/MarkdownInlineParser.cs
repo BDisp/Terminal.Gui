@@ -24,6 +24,14 @@ internal static class MarkdownInlineParser
 
         while (idx < text.Length)
         {
+            if (text [idx] == '\\' && idx + 1 < text.Length && Markdig.Helpers.CharHelper.IsAsciiPunctuation (text [idx + 1]))
+            {
+                runs.Add (new InlineRun (text [idx + 1].ToString (), defaultRole));
+                idx += 2;
+
+                continue;
+            }
+
             if (TryParseImage (text, idx, out InlineRun? imageRun, out int imageLen))
             {
                 runs.Add (imageRun!);
@@ -40,7 +48,7 @@ internal static class MarkdownInlineParser
                 continue;
             }
 
-            if (TryParseDelimited (text, idx, "`", MarkdownStyleRole.InlineCode, out InlineRun? codeRun, out int codeLen))
+            if (TryParseCode (text, idx, out InlineRun? codeRun, out int codeLen))
             {
                 runs.Add (codeRun!);
                 idx += codeLen;
@@ -89,6 +97,64 @@ internal static class MarkdownInlineParser
         }
 
         return runs;
+    }
+
+    private static bool TryParseCode (string text, int start, out InlineRun? run, out int tokenLength)
+    {
+        run = null;
+        tokenLength = 0;
+
+        if (text [start] != '`')
+        {
+            return false;
+        }
+
+        int delimiterLength = 1;
+
+        while (start + delimiterLength < text.Length && text [start + delimiterLength] == '`')
+        {
+            delimiterLength++;
+        }
+
+        int index = start + delimiterLength;
+
+        while (index < text.Length)
+        {
+            if (text [index] != '`')
+            {
+                index++;
+
+                continue;
+            }
+
+            int end = index;
+
+            while (end < text.Length && text [end] == '`')
+            {
+                end++;
+            }
+
+            if (end - index != delimiterLength)
+            {
+                index = end;
+
+                continue;
+            }
+
+            string content = text [(start + delimiterLength)..index].Replace ("\\|", "|", StringComparison.Ordinal).Replace ('\n', ' ');
+
+            if (content.StartsWith (' ') && content.EndsWith (' ') && !string.IsNullOrWhiteSpace (content))
+            {
+                content = content [1..^1];
+            }
+
+            run = new InlineRun (content, MarkdownStyleRole.InlineCode);
+            tokenLength = end - start;
+
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryParseDelimited (string text, int start, string delimiter, MarkdownStyleRole role, out InlineRun? run, out int tokenLength)
@@ -183,7 +249,7 @@ internal static class MarkdownInlineParser
 
     private static int FindNextSpecialToken (string text, int start)
     {
-        int [] indexes = [text.IndexOf ('!', start), text.IndexOf ('[', start), text.IndexOf ('`', start), text.IndexOf ('*', start)];
+        int [] indexes = [text.IndexOf ('\\', start), text.IndexOf ('!', start), text.IndexOf ('[', start), text.IndexOf ('`', start), text.IndexOf ('*', start)];
 
         int next = -1;
 

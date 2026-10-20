@@ -366,7 +366,7 @@ public partial class Markdown
             switch (inline)
             {
                 case LiteralInline lit:
-                    sb.Append (lit.Content.ToString ());
+                    sb.Append (EscapeCellLiteral (lit.Content.ToString ()));
 
                     break;
 
@@ -390,7 +390,7 @@ public partial class Markdown
                         sb.Append (' ');
                     }
 
-                    sb.Append (code.Content);
+                    sb.Append (code.Content.Replace ("\\|", "|", StringComparison.Ordinal).Replace ("|", "\\|", StringComparison.Ordinal));
 
                     if (padCode)
                     {
@@ -420,7 +420,7 @@ public partial class Markdown
                     break;
 
                 case HtmlEntityInline entity:
-                    sb.Append (entity.Transcoded.ToString ());
+                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString ()));
 
                     break;
 
@@ -442,6 +442,23 @@ public partial class Markdown
 
             inline = inline.NextSibling;
         }
+    }
+
+    private static string EscapeCellLiteral (string text)
+    {
+        StringBuilder escaped = new ();
+
+        foreach (char character in text)
+        {
+            if ("\\`*_[]|".Contains (character))
+            {
+                escaped.Append ('\\');
+            }
+
+            escaped.Append (character);
+        }
+
+        return escaped.ToString ();
     }
 
     private void HandleHtmlBlock (HtmlBlock html, string prefix, string contPrefix, MarkdownStyleRole defaultRole)

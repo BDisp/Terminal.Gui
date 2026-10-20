@@ -86,14 +86,26 @@ public sealed class TableData
             return [];
         }
 
-        string [] cells = trimmed.Split ('|');
+        List<string> cells = [];
+        int start = 0;
+        int backslashes = 0;
 
-        for (var i = 0; i < cells.Length; i++)
+        for (int index = 0; index < trimmed.Length; index++)
         {
-            cells [i] = cells [i].Trim ();
+            char character = trimmed [index];
+
+            if (character == '|' && backslashes % 2 == 0)
+            {
+                cells.Add (trimmed [start..index].Trim ());
+                start = index + 1;
+            }
+
+            backslashes = character == '\\' ? backslashes + 1 : 0;
         }
 
-        return cells;
+        cells.Add (trimmed [start..].Trim ());
+
+        return cells.ToArray ();
     }
 
     private static bool IsSeparatorRow (string [] cells)
