@@ -127,11 +127,11 @@ public sealed class MarkdownTable : View, IDesignable
         for (var i = 0; i < _data.ColumnCount; i++)
         {
             seps [i] = _data.ColumnAlignments [i] switch
-            {
-                Alignment.Center => ":---:",
-                Alignment.End => "---:",
-                _ => "---"
-            };
+                       {
+                           Alignment.Center => ":---:",
+                           Alignment.End => "---:",
+                           _ => "---"
+                       };
         }
 
         lines.Add ($"| {string.Join (" | ", seps)} |");
