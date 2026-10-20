@@ -81,17 +81,11 @@ public partial class Markdown
                 {
                     SyntaxHighlighter = SyntaxHighlighter,
                     UseThemeBackground = UseThemeBackground,
-                    TableData = tableData,
                     X = 0,
                     Y = startLine,
                     Width = Dim.Fill ()
                 };
-                if (block.TableContent is { } tableContent)
-                {
-                    tableView.SetParsedContent (tableContent);
-                }
-
-                tableView.Recalculate (tableLayoutWidth);
+                tableView.SetContent (tableData, block.TableContent, tableLayoutWidth);
 
                 // Capture the rendered height BEFORE Add() — Add triggers EndInit → Layout
                 // which may recalculate the table at a stale content width, corrupting RenderedHeight.

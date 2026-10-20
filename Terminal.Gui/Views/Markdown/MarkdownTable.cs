@@ -151,35 +151,19 @@ public sealed class MarkdownTable : View, IDesignable
     public TableData TableData
     {
         get => _data;
-        set
-        {
-            _data = value;
-            _headerSegments = ParseCellSegments (value.Headers, MarkdownStyleRole.Heading);
-            _rowSegments = new List<StyledSegment> [value.Rows.Length] [];
-
-            for (var r = 0; r < value.Rows.Length; r++)
-            {
-                _rowSegments [r] = ParseCellSegments (value.Rows [r], MarkdownStyleRole.Normal);
-            }
-
-            // Keep Text in sync with TableData
-            SetTextDirect (BuildTableText ());
-
-            // Compute initial layout using current Frame width (or a default for standalone use)
-            int initialWidth = Frame.Width > 0 ? Frame.Width : 80;
-            _lastComputedWidth = -1;
-            Recalculate (initialWidth);
-            SetNeedsLayout ();
-            SetNeedsDraw ();
-        }
+        set => SetContent (value, null, Frame.Width > 0 ? Frame.Width : 80);
     }
 
-    internal void SetParsedContent (MarkdownTableContent content)
+    internal void SetContent (TableData data, MarkdownTableContent? content, int width)
     {
-        _headerSegments = content.Headers;
-        _rowSegments = content.Rows;
+        _data = data;
+        _headerSegments = content?.Headers ?? ParseCellSegments (data.Headers, MarkdownStyleRole.Heading);
+        _rowSegments = content?.Rows ?? data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal)).ToArray ();
+
+        // Keep Text in sync without parsing or laying out discarded intermediate content.
+        SetTextDirect (BuildTableText ());
         _lastComputedWidth = -1;
-        Recalculate (Frame.Width > 0 ? Frame.Width : 80);
+        Recalculate (width);
         SetNeedsLayout ();
         SetNeedsDraw ();
     }
