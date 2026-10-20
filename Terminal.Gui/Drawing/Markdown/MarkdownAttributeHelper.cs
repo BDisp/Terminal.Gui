@@ -123,7 +123,7 @@ internal static class MarkdownAttributeHelper
 
         foreach (InlineRun run in runs)
         {
-            segments.Add (new StyledSegment (run.Text, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role) { AdditionalStyle = run.AdditionalStyle });
+            segments.Add (run.ToStyledSegment ());
         }
 
         return segments;

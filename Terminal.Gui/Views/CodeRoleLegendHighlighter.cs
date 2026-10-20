@@ -77,6 +77,6 @@ internal sealed class CodeRoleLegendHighlighter : ISyntaxHighlighter
 
     private static void AddSegment (List<StyledSegment> segments, StyledSegment source, string text, VisualRole? role)
     {
-        segments.Add (new StyledSegment (text, source.StyleRole, source.Url, source.ImageSource, source.Attribute, role));
+        segments.Add (source.WithText (text, role));
     }
 }

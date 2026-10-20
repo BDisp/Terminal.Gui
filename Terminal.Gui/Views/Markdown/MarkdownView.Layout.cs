@@ -386,7 +386,7 @@ public partial class Markdown
                     }
                 }
 
-                currentSegments.Add (new StyledSegment (grapheme, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role) { AdditionalStyle = run.AdditionalStyle });
+                currentSegments.Add (run.ToStyledSegment (grapheme));
                 currentWidth += graphemeWidth;
             }
         }

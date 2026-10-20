@@ -553,7 +553,7 @@ public partial class Markdown
                         _ => TextStyle.Italic
                     };
                     runs.AddRange (WalkInlines (em.FirstChild, emRole)
-                                       .Select (run => new InlineRun (run.Text, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role)
+                                       .Select (run => run with
                                        {
                                            AdditionalStyle = run.AdditionalStyle | emphasisStyle
                                        }));
@@ -576,9 +576,10 @@ public partial class Markdown
                 case LinkInline link:
                     string? url = link.Url;
                     List<InlineRun> linkRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.Link);
-                    runs.AddRange (linkRuns.Select (r => new InlineRun (r.Text, MarkdownStyleRole.Link, url, r.ImageSource, r.Attribute, r.Role)
+                    runs.AddRange (linkRuns.Select (r => r with
                     {
-                        AdditionalStyle = r.AdditionalStyle
+                        StyleRole = MarkdownStyleRole.Link,
+                        Url = url
                     }));
 
                     break;
@@ -644,7 +645,10 @@ public partial class Markdown
         }
 
         InlineRun first = runs [0];
-        runs [0] = new InlineRun (trimmed, first.StyleRole, first.Url, first.ImageSource, first.Attribute, first.Role) { AdditionalStyle = first.AdditionalStyle };
+        runs [0] = first with
+        {
+            Text = trimmed
+        };
 
         if (runs [0].Text.Length == 0)
         {
@@ -688,12 +692,7 @@ public partial class Markdown
                 IReadOnlyList<StyledSegment> highlighted = SyntaxHighlighter.Highlight (line, language);
                 List<InlineRun> converted = [];
 
-                converted.AddRange (highlighted.Select (segment => new InlineRun (segment.Text,
-                                                                                   segment.StyleRole,
-                                                                                   segment.Url,
-                                                                                   segment.ImageSource,
-                                                                                   segment.Attribute,
-                                                                                   segment.Role)));
+                converted.AddRange (highlighted.Select (InlineRun.FromStyledSegment));
 
                 runs = converted;
             }

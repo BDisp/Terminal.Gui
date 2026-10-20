@@ -1,6 +1,6 @@
 namespace Terminal.Gui.Views;
 
-internal sealed class InlineRun (
+internal sealed record InlineRun (
     string text,
     MarkdownStyleRole styleRole,
     string? url = null,
@@ -8,11 +8,23 @@ internal sealed class InlineRun (
     Attribute? attribute = null,
     VisualRole? role = null)
 {
-    public string Text { get; } = text;
-    public MarkdownStyleRole StyleRole { get; } = styleRole;
-    public string? Url { get; } = url;
-    public string? ImageSource { get; } = imageSource;
-    public Attribute? Attribute { get; } = attribute;
-    public VisualRole? Role { get; } = role;
+    public string Text { get; init; } = text;
+    public MarkdownStyleRole StyleRole { get; init; } = styleRole;
+    public string? Url { get; init; } = url;
+    public string? ImageSource { get; init; } = imageSource;
+    public Attribute? Attribute { get; init; } = attribute;
+    public VisualRole? Role { get; init; } = role;
     public TextStyle AdditionalStyle { get; init; }
+
+    public StyledSegment ToStyledSegment (string? text = null) =>
+        new (text ?? Text, StyleRole, Url, ImageSource, Attribute, Role)
+        {
+            AdditionalStyle = AdditionalStyle
+        };
+
+    public static InlineRun FromStyledSegment (StyledSegment segment) =>
+        new (segment.Text, segment.StyleRole, segment.Url, segment.ImageSource, segment.Attribute, segment.Role)
+        {
+            AdditionalStyle = segment.AdditionalStyle
+        };
 }
