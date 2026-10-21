@@ -31,7 +31,8 @@ internal static class MarkdownInlineParser
             Lines = new StringLineGroup (text)
         };
         document.Add (paragraph);
-        InlineProcessor processor = new (document, _parsers, false, null);
+        // Retain spans so unsupported inline leaves can fall back to their original source.
+        InlineProcessor processor = new (document, _parsers, true, null);
 
         try
         {
@@ -43,6 +44,6 @@ internal static class MarkdownInlineParser
             return [new InlineRun (text, defaultRole)];
         }
 
-        return Markdown.LowerCellInlines (paragraph.Inline?.FirstChild, defaultRole);
+        return Markdown.LowerCellInlines (paragraph.Inline?.FirstChild, defaultRole, text);
     }
 }

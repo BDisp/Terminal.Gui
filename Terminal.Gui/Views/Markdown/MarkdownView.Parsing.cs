@@ -104,7 +104,7 @@ public partial class Markdown
                 break;
 
             case DefinitionTerm term:
-                _blocks.Add (new IntermediateBlock (WalkInlines (term.Inline?.FirstChild, defaultRole), true, prefix, contPrefix));
+                _blocks.Add (new IntermediateBlock (WalkInlines (term.Inline?.FirstChild, defaultRole, _markdown), true, prefix, contPrefix));
 
                 break;
 
@@ -201,7 +201,7 @@ public partial class Markdown
 
     private void HandleHeadingBlock (HeadingBlock heading, string prefix, string contPrefix)
     {
-        List<InlineRun> runs = WalkInlines (heading.Inline?.FirstChild, MarkdownStyleRole.Heading);
+        List<InlineRun> runs = WalkInlines (heading.Inline?.FirstChild, MarkdownStyleRole.Heading, _markdown);
 
         // Compute anchor slug from heading text before inserting the marker
         string headingText = string.Concat (runs.Select (r => r.Text)).Replace ('\n', ' ');
@@ -222,7 +222,7 @@ public partial class Markdown
 
     private void HandleParagraphBlock (ParagraphBlock para, string prefix, string contPrefix, MarkdownStyleRole defaultRole)
     {
-        List<InlineRun> runs = WalkInlines (para.Inline?.FirstChild, defaultRole);
+        List<InlineRun> runs = WalkInlines (para.Inline?.FirstChild, defaultRole, _markdown);
         _blocks.Add (new IntermediateBlock (runs, true, prefix, contPrefix));
     }
 
@@ -283,13 +283,13 @@ public partial class Markdown
                         // To align wrapped task text after variable-width glyph markers, include the trailing space in the continuation indent.
                         string taskCont = contPrefix + new string (' ', marker.GetColumns () + checkbox.GetColumns ());
 
-                        List<InlineRun> runs = WalkInlines (firstInline.NextSibling, role);
+                        List<InlineRun> runs = WalkInlines (firstInline.NextSibling, role, _markdown);
                         TrimLeadingSpace (runs);
                         _blocks.Add (new IntermediateBlock (runs, true, taskPrefix, taskCont));
                     }
                     else
                     {
-                        List<InlineRun> runs = WalkInlines (firstInline, defaultRole);
+                        List<InlineRun> runs = WalkInlines (firstInline, defaultRole, _markdown);
                         _blocks.Add (new IntermediateBlock (runs, true, itemPrefix, itemCont));
                     }
 
@@ -362,7 +362,7 @@ public partial class Markdown
         _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.Table)], false, tableData: tableData, tableContent: content));
     }
 
-    private static List<StyledSegment> ExtractCellSegments (TableCell cell, MarkdownStyleRole defaultRole)
+    private List<StyledSegment> ExtractCellSegments (TableCell cell, MarkdownStyleRole defaultRole)
     {
         List<StyledSegment> segments = [];
 
@@ -378,36 +378,16 @@ public partial class Markdown
                 segments.Add (new StyledSegment (" ", defaultRole));
             }
 
-            segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (LowerCellInlines (paragraph.Inline?.FirstChild, defaultRole)));
+            segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (LowerCellInlines (paragraph.Inline?.FirstChild, defaultRole, _markdown)));
         }
 
         return segments;
     }
 
-    internal static List<InlineRun> LowerCellInlines (Inline? inline, MarkdownStyleRole defaultRole)
-    {
-        List<InlineRun> runs = WalkInlines (inline, defaultRole);
+    internal static List<InlineRun> LowerCellInlines (Inline? inline, MarkdownStyleRole defaultRole, string source) =>
+        WalkInlines (inline, defaultRole, source, isTableCell: true);
 
-        for (int index = 0; index < runs.Count; index++)
-        {
-            InlineRun run = runs [index];
-
-            if (run.StyleRole != MarkdownStyleRole.InlineCode)
-            {
-                continue;
-            }
-
-            // Pipe-table source escapes its separators even inside code spans.
-            runs [index] = run with
-            {
-                Text = run.Text.Replace ("\\|", "|", StringComparison.Ordinal)
-            };
-        }
-
-        return runs;
-    }
-
-    private static string ExtractCellText (TableCell cell)
+    private string ExtractCellText (TableCell cell)
     {
         // Keep the public text model and clipboard representation in sync. Rendering
         // uses ExtractCellSegments so this serialization does not control display fidelity.
@@ -417,28 +397,28 @@ public partial class Markdown
         {
             if (child is ParagraphBlock para)
             {
-                AppendInlineText (para.Inline?.FirstChild, sb);
+                AppendInlineText (para.Inline?.FirstChild, sb, _markdown);
             }
         }
 
         return sb.ToString ().Trim ();
     }
 
-    private static void AppendInlineText (Inline? inline, StringBuilder sb, bool inLinkLabel = false)
+    private static void AppendInlineText (Inline? inline, StringBuilder sb, string source, bool inLinkLabel = false)
     {
         while (inline is { })
         {
             switch (inline)
             {
                 case LiteralInline lit:
-                    sb.Append (EscapeCellLiteral (lit.Content.ToString (), inLinkLabel));
+                    sb.Append (EscapeCellLiteral (lit.Content.ToString (), inLinkLabel, inline.NextSibling is LinkInline { IsImage: false }));
 
                     break;
 
                 case EmphasisInline em:
                     var delim = new string (em.DelimiterChar, em.DelimiterCount);
                     sb.Append (delim);
-                    AppendInlineText (em.FirstChild, sb, inLinkLabel);
+                    AppendInlineText (em.FirstChild, sb, source, inLinkLabel);
                     sb.Append (delim);
 
                     break;
@@ -468,7 +448,7 @@ public partial class Markdown
 
                 case LinkInline { IsImage: true } link:
                     sb.Append ("![");
-                    AppendInlineText (link.FirstChild, sb, inLinkLabel: true);
+                    AppendInlineText (link.FirstChild, sb, source, inLinkLabel: true);
                     sb.Append ("](");
                     sb.Append (EscapeCellDestination (link.Url));
                     sb.Append (')');
@@ -477,7 +457,7 @@ public partial class Markdown
 
                 case LinkInline link:
                     sb.Append ('[');
-                    AppendInlineText (link.FirstChild, sb, inLinkLabel: true);
+                    AppendInlineText (link.FirstChild, sb, source, inLinkLabel: true);
                     sb.Append ("](");
                     sb.Append (EscapeCellDestination (link.Url));
                     sb.Append (')');
@@ -485,7 +465,7 @@ public partial class Markdown
                     break;
 
                 case HtmlEntityInline entity:
-                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString (), inLinkLabel));
+                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString (), inLinkLabel, inline.NextSibling is LinkInline { IsImage: false }));
 
                     break;
 
@@ -500,7 +480,17 @@ public partial class Markdown
                     break;
 
                 case ContainerInline container:
-                    AppendInlineText (container.FirstChild, sb, inLinkLabel);
+                    AppendInlineText (container.FirstChild, sb, source, inLinkLabel);
+
+                    break;
+
+                case HtmlInline or LineBreakInline:
+                    // Preserve the existing omission of HTML tags and cell line-break markers.
+
+                    break;
+
+                case LeafInline unknown:
+                    sb.Append (EscapeCellLiteral (GetInlineSource (unknown, source), inLinkLabel));
 
                     break;
             }
@@ -509,21 +499,29 @@ public partial class Markdown
         }
     }
 
+    private static string GetInlineSource (Inline inline, string source) =>
+        inline.Span.Start >= 0 && inline.Span.End >= inline.Span.Start && inline.Span.End < source.Length
+            ? source.Substring (inline.Span.Start, inline.Span.Length)
+            : string.Empty;
+
     private static string EscapeCellDestination (string? destination) =>
         (destination ?? string.Empty).Replace ("\\", "\\\\", StringComparison.Ordinal)
                                      .Replace ("|", "\\|", StringComparison.Ordinal)
                                      .Replace ("(", "\\(", StringComparison.Ordinal)
                                      .Replace (")", "\\)", StringComparison.Ordinal);
 
-    private static string EscapeCellLiteral (string text, bool inLinkLabel)
+    private static string EscapeCellLiteral (string text, bool inLinkLabel, bool followedByLink = false)
     {
         StringBuilder escaped = new ();
         bool escapeUnderscores = Regex.IsMatch (text, @"(?<!\w)_|_(?!\w)");
         bool escapeBrackets = inLinkLabel || text.Contains ("](", StringComparison.Ordinal);
 
-        foreach (char character in text)
+        for (int index = 0; index < text.Length; index++)
         {
+            char character = text [index];
+
             if ("\\`*|~^=+<&${}".Contains (character)
+                || (character == '!' && index == text.Length - 1 && followedByLink)
                 || (character == '_' && escapeUnderscores)
                 || (character is '[' or ']' && escapeBrackets))
             {
@@ -592,7 +590,7 @@ public partial class Markdown
         }
     }
 
-    private static List<InlineRun> WalkInlines (Inline? inline, MarkdownStyleRole defaultRole)
+    private static List<InlineRun> WalkInlines (Inline? inline, MarkdownStyleRole defaultRole, string source, bool isTableCell = false)
     {
         List<InlineRun> runs = [];
 
@@ -619,7 +617,7 @@ public partial class Markdown
                         MarkdownStyleRole.Strikethrough => TextStyle.Strikethrough,
                         _ => TextStyle.Italic
                     };
-                    runs.AddRange (WalkInlines (em.FirstChild, emRole)
+                    runs.AddRange (WalkInlines (em.FirstChild, emRole, source, isTableCell)
                                        .Select (run => run with
                                        {
                                            AdditionalStyle = run.AdditionalStyle | emphasisStyle
@@ -628,12 +626,14 @@ public partial class Markdown
                     break;
 
                 case CodeInline code:
-                    runs.Add (new InlineRun (code.Content, MarkdownStyleRole.InlineCode));
+                    // Normalize table separators before a surrounding link replaces the code role.
+                    string codeText = isTableCell ? code.Content.Replace ("\\|", "|", StringComparison.Ordinal) : code.Content;
+                    runs.Add (new InlineRun (codeText, MarkdownStyleRole.InlineCode));
 
                     break;
 
                 case LinkInline { IsImage: true } link:
-                    List<InlineRun> altRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.ImageAlt);
+                    List<InlineRun> altRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.ImageAlt, source, isTableCell);
                     string altText = string.Concat (altRuns.Select (r => r.Text));
                     string fallback = MarkdownImageResolver.GetFallbackText (altText);
                     runs.Add (new InlineRun (fallback, MarkdownStyleRole.ImageAlt, ImageSource: link.Url));
@@ -642,7 +642,7 @@ public partial class Markdown
 
                 case LinkInline link:
                     string? url = link.Url;
-                    List<InlineRun> linkRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.Link);
+                    List<InlineRun> linkRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.Link, source, isTableCell);
                     runs.AddRange (linkRuns.Select (r => r with
                     {
                         StyleRole = MarkdownStyleRole.Link,
@@ -680,12 +680,18 @@ public partial class Markdown
 
                     break;
 
+                case LeafInline unknown:
+                    // Preserve unsupported leaf syntax instead of silently dropping its text.
+                    runs.Add (new InlineRun (GetInlineSource (unknown, source), defaultRole));
+
+                    break;
+
                 default:
                     // For unrecognized container inline types (e.g. PipeTableDelimiterInline),
                     // recurse into children to extract any text content.
                     if (inline is ContainerInline unknownContainer)
                     {
-                        runs.AddRange (WalkInlines (unknownContainer.FirstChild, defaultRole));
+                        runs.AddRange (WalkInlines (unknownContainer.FirstChild, defaultRole, source, isTableCell));
                     }
 
                     break;

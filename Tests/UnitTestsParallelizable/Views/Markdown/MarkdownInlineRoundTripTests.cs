@@ -63,6 +63,10 @@ public class MarkdownInlineRoundTripTests
     }
 
     [Theory]
+    [InlineData ("$x^2$")]
+    [InlineData ("Wow\\![docs](https://x)")]
+    [InlineData ("Wow&#33;[docs](https://x)")]
+    [InlineData ("[`a\\|b`](u)")]
     [InlineData ("a\\|b")]
     [InlineData ("**a\\|b**")]
     [InlineData ("\\*literal\\*")]
@@ -106,6 +110,61 @@ public class MarkdownInlineRoundTripTests
 
         Assert.Equal (code ? "a" : source, string.Concat (runs.Select (run => run.Text)));
         Assert.All (runs, run => Assert.Equal (code ? MarkdownStyleRole.InlineCode : MarkdownStyleRole.Normal, run.StyleRole));
+    }
+
+    [Theory]
+    [InlineData ("$x^2$", "$x^2$")]
+    [InlineData ("before $x^2$ after", "before $x^2$ after")]
+    [InlineData ("\\{note\\}", "{note}")]
+    public void Table_Cell_Text_Survives_Advanced_Inline_Parsing (string source, string expected)
+    {
+        using TgMarkdown view = CreateTable (source);
+        MarkdownTable parsed = Assert.Single (view.SubViews.OfType<MarkdownTable> ());
+        using MarkdownTable standalone = new ()
+        {
+            TableData = new (["H"], [Alignment.Start], [[source]])
+        };
+
+        Assert.Equal (expected, string.Concat (GetBody (parsed).Select (segment => segment.Text)));
+        Assert.Equal (expected, string.Concat (GetBody (standalone).Select (segment => segment.Text)));
+    }
+
+    [Fact]
+    public void Unescaped_Table_Attributes_Are_Metadata_In_Both_Paths ()
+    {
+        using TgMarkdown view = CreateTable ("**bold**{note}");
+        MarkdownTable parsed = Assert.Single (view.SubViews.OfType<MarkdownTable> ());
+        List<InlineRun> standalone = MarkdownInlineParser.ParseInlines ("**bold**{note}", MarkdownStyleRole.Normal);
+
+        Assert.Equal ("bold", string.Concat (GetBody (parsed).Select (segment => segment.Text)));
+        Assert.Equal ("bold", string.Concat (standalone.Select (run => run.Text)));
+    }
+
+    [Fact]
+    public void Linked_Table_Code_Unescapes_Pipe_Before_Applying_Link_Role ()
+    {
+        using TgMarkdown view = CreateTable ("[`a\\|b`](u)");
+        MarkdownTable table = Assert.Single (view.SubViews.OfType<MarkdownTable> ());
+        StyledSegment segment = Assert.Single (GetBody (table));
+
+        Assert.Equal ("a|b", segment.Text);
+        Assert.Equal (MarkdownStyleRole.Link, segment.StyleRole);
+        Assert.Equal ("u", segment.Url);
+    }
+
+    [Fact]
+    public void Linked_Code_Outside_Tables_Preserves_Literal_Backslash ()
+    {
+        using TgMarkdown view = new ()
+        {
+            Text = "[`a\\|b`](u)",
+            Width = 60,
+            Height = 10
+        };
+        view.Layout ();
+        List<IntermediateBlock> blocks = (List<IntermediateBlock>)typeof (TgMarkdown).GetField ("_blocks", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue (view)!;
+
+        Assert.Equal ("a\\|b", Assert.Single (Assert.Single (blocks).Runs).Text);
     }
 
     private static TgMarkdown CreateTable (string cell)

@@ -9,6 +9,9 @@ namespace ViewsTests.Markdown;
 public class MarkdownParsedContentTests : TestDriverBase
 {
     [Theory]
+    [InlineData ("$x^2$", "$x^2$")]
+    [InlineData ("Wow\\![docs](https://x)", "Wow!docs")]
+    [InlineData ("[`a\\|b`](u)", "a|b")]
     [InlineData ("``a`b``", "a`b")]
     [InlineData ("``a\\|b`c``", "a|b`c")]
     [InlineData ("`` `x` ``", "`x`")]
