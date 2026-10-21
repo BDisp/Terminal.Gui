@@ -1,3 +1,4 @@
+using System.Reflection;
 using UnitTests;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
@@ -38,7 +39,6 @@ public class MarkdownTableRoundTripTests : TestDriverBase
         roundTrip.Layout ();
         MarkdownTable reparsed = Assert.Single (roundTrip.SubViews.OfType<MarkdownTable> ());
         Assert.Equal (table.TableData.Rows [0], reparsed.TableData.Rows [0]);
-        Assert.Equal (MarkdownTable.ComputeColumnWidths (table.TableData, 60), MarkdownTable.ComputeColumnWidths (data, 60));
 
         using IDriver driver = CreateTestDriver (60, 10);
         using MarkdownTable standalone = new ()
@@ -48,6 +48,8 @@ public class MarkdownTableRoundTripTests : TestDriverBase
             Width = 60
         };
         standalone.Layout ();
+        FieldInfo widths = typeof (MarkdownTable).GetField ("_columnWidths", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.Equal ((int [])widths.GetValue (table)!, (int [])widths.GetValue (standalone)!);
         standalone.Draw ();
 
         Assert.Equal (expected, ReadCellText ());

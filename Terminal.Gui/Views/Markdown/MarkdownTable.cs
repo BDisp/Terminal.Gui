@@ -847,15 +847,7 @@ public sealed class MarkdownTable : View, IDesignable
     ///         <item>Last resort: reduce all columns evenly if still over budget.</item>
     ///     </list>
     /// </summary>
-    internal static int [] ComputeColumnWidths (TableData data, int maxWidth)
-    {
-        List<StyledSegment> [] headers = ParseCellSegments (data.Headers, MarkdownStyleRole.Heading);
-        List<StyledSegment> [] [] rows = data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal)).ToArray ();
-
-        return ComputeColumnWidths (headers, rows, maxWidth);
-    }
-
-    private static int [] ComputeColumnWidths (List<StyledSegment> [] headers, List<StyledSegment> [] [] rows, int maxWidth)
+    internal static int [] ComputeColumnWidths (List<StyledSegment> [] headers, List<StyledSegment> [] [] rows, int maxWidth)
     {
         int cols = headers.Length;
         var maxWidths = new int [cols];
@@ -1054,18 +1046,12 @@ public sealed class MarkdownTable : View, IDesignable
         }
     }
 
-    /// <summary>Measures the display width of a cell's rendered text (stripping markdown formatting).</summary>
-    internal static int MeasureRenderedWidth (string cellText) =>
-        MeasureRenderedWidth (MarkdownAttributeHelper.ToStyledSegments (MarkdownInlineParser.ParseInlines (cellText, MarkdownStyleRole.Normal)));
-
-    private static int MeasureRenderedWidth (IReadOnlyList<StyledSegment> segments) =>
+    /// <summary>Measure the display width of a cell's styled content.</summary>
+    internal static int MeasureRenderedWidth (IReadOnlyList<StyledSegment> segments) =>
         Math.Max (string.Concat (segments.Select (segment => segment.Text)).Split ('\n').Max (line => line.GetColumns ()), 1);
 
-    /// <summary>Measures the longest displayed word across inline style boundaries.</summary>
-    internal static int MeasureLongestWord (string cellText) =>
-        MeasureLongestWord (MarkdownAttributeHelper.ToStyledSegments (MarkdownInlineParser.ParseInlines (cellText, MarkdownStyleRole.Normal)));
-
-    private static int MeasureLongestWord (IReadOnlyList<StyledSegment> segments)
+    /// <summary>Measure the longest displayed word across inline style boundaries.</summary>
+    internal static int MeasureLongestWord (IReadOnlyList<StyledSegment> segments)
     {
         string text = string.Concat (segments.Select (segment => segment.Text));
         string [] words = text.Split ([' ', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries);
