@@ -158,7 +158,7 @@ public sealed class MarkdownTable : View, IDesignable
     {
         _data = data;
         _headerSegments = content?.Headers ?? ParseCellSegments (data.Headers, MarkdownStyleRole.Heading);
-        _rowSegments = content?.Rows ?? data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal)).ToArray ();
+        _rowSegments = content?.Rows ?? [.. data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal))];
 
         // Keep Text in sync without parsing or laying out discarded intermediate content.
         SetTextDirect (BuildTableText ());

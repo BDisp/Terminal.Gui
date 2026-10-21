@@ -102,6 +102,6 @@ public class MarkdownReviewRegressionTests
         string ansi = view.RenderToAnsi (source);
         string plain = Regex.Replace (ansi, @"\x1b\[[0-?]*[ -/]*[@-~]", string.Empty);
 
-        return plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ()).ToArray ();
+        return [.. plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ())];
     }
 }

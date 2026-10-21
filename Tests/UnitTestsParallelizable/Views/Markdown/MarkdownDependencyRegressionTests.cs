@@ -240,6 +240,6 @@ public class MarkdownDependencyRegressionTests
         string plain = Regex.Replace (ansi, @"\x1b\[[0-?]*[ -/]*[@-~]", string.Empty);
         plain = Regex.Replace (plain, @"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", string.Empty);
 
-        return plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ()).ToArray ();
+        return [.. plain.Replace ("\r\n", "\n").TrimEnd ().Split ('\n').Select (line => line.TrimEnd ())];
     }
 }

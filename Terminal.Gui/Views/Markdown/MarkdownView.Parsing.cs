@@ -325,7 +325,7 @@ public partial class Markdown
             if (!headerParsed)
             {
                 headers.AddRange (cells);
-                headerSegments = row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Heading)).ToArray ();
+                headerSegments = [.. row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Heading))];
 
                 alignments = table.ColumnDefinitions.Take (headers.Count)
                                   .Select (col => col.Alignment switch
@@ -340,7 +340,7 @@ public partial class Markdown
             else if (!row.IsHeader)
             {
                 rows.Add (cells);
-                rowSegments.Add (row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Normal)).ToArray ());
+                rowSegments.Add ([.. row.Select (cell => ExtractCellSegments ((TableCell)cell, MarkdownStyleRole.Normal))]);
             }
         }
 
@@ -358,7 +358,7 @@ public partial class Markdown
         }
 
         TableData tableData = new (headers.ToArray (), alignments, rows.ToArray ());
-        MarkdownTableContent content = new (headerSegments, rowSegments.ToArray ());
+        MarkdownTableContent content = new (headerSegments, [.. rowSegments]);
         _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.Table)], false, tableData: tableData, tableContent: content));
     }
 

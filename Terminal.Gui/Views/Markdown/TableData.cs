@@ -130,7 +130,7 @@ public sealed class TableData
 
         cells.Add (trimmed [start..].Trim ());
 
-        return cells.ToArray ();
+        return [.. cells];
     }
 
     private static bool IsSeparatorRow (string [] cells)
