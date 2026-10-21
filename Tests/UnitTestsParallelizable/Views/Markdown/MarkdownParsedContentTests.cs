@@ -10,6 +10,7 @@ public class MarkdownParsedContentTests : TestDriverBase
 {
     [Theory]
     [InlineData ("``a`b``", "a`b")]
+    [InlineData ("``a\\|b`c``", "a|b`c")]
     [InlineData ("`` `x` ``", "`x`")]
     [InlineData ("\\*literal\\*", "*literal*")]
     [InlineData ("[Testing [Header]](https://example.com)", "Testing [Header]")]

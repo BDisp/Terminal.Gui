@@ -378,10 +378,33 @@ public partial class Markdown
                 segments.Add (new StyledSegment (" ", defaultRole));
             }
 
-            segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (WalkInlines (paragraph.Inline?.FirstChild, defaultRole)));
+            segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (LowerCellInlines (paragraph.Inline?.FirstChild, defaultRole)));
         }
 
         return segments;
+    }
+
+    internal static List<InlineRun> LowerCellInlines (Inline? inline, MarkdownStyleRole defaultRole)
+    {
+        List<InlineRun> runs = WalkInlines (inline, defaultRole);
+
+        for (int index = 0; index < runs.Count; index++)
+        {
+            InlineRun run = runs [index];
+
+            if (run.StyleRole != MarkdownStyleRole.InlineCode)
+            {
+                continue;
+            }
+
+            // Pipe-table source escapes its separators even inside code spans.
+            runs [index] = run with
+            {
+                Text = run.Text.Replace ("\\|", "|", StringComparison.Ordinal)
+            };
+        }
+
+        return runs;
     }
 
     private static string ExtractCellText (TableCell cell)
@@ -401,21 +424,21 @@ public partial class Markdown
         return sb.ToString ().Trim ();
     }
 
-    private static void AppendInlineText (Inline? inline, StringBuilder sb)
+    private static void AppendInlineText (Inline? inline, StringBuilder sb, bool inLinkLabel = false)
     {
         while (inline is { })
         {
             switch (inline)
             {
                 case LiteralInline lit:
-                    sb.Append (EscapeCellLiteral (lit.Content.ToString ()));
+                    sb.Append (EscapeCellLiteral (lit.Content.ToString (), inLinkLabel));
 
                     break;
 
                 case EmphasisInline em:
                     var delim = new string (em.DelimiterChar, em.DelimiterCount);
                     sb.Append (delim);
-                    AppendInlineText (em.FirstChild, sb);
+                    AppendInlineText (em.FirstChild, sb, inLinkLabel);
                     sb.Append (delim);
 
                     break;
@@ -445,24 +468,24 @@ public partial class Markdown
 
                 case LinkInline { IsImage: true } link:
                     sb.Append ("![");
-                    AppendInlineText (link.FirstChild, sb);
+                    AppendInlineText (link.FirstChild, sb, inLinkLabel: true);
                     sb.Append ("](");
-                    sb.Append (link.Url);
+                    sb.Append (EscapeCellDestination (link.Url));
                     sb.Append (')');
 
                     break;
 
                 case LinkInline link:
                     sb.Append ('[');
-                    AppendInlineText (link.FirstChild, sb);
+                    AppendInlineText (link.FirstChild, sb, inLinkLabel: true);
                     sb.Append ("](");
-                    sb.Append (link.Url);
+                    sb.Append (EscapeCellDestination (link.Url));
                     sb.Append (')');
 
                     break;
 
                 case HtmlEntityInline entity:
-                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString ()));
+                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString (), inLinkLabel));
 
                     break;
 
@@ -477,7 +500,7 @@ public partial class Markdown
                     break;
 
                 case ContainerInline container:
-                    AppendInlineText (container.FirstChild, sb);
+                    AppendInlineText (container.FirstChild, sb, inLinkLabel);
 
                     break;
             }
@@ -486,13 +509,23 @@ public partial class Markdown
         }
     }
 
-    private static string EscapeCellLiteral (string text)
+    private static string EscapeCellDestination (string? destination) =>
+        (destination ?? string.Empty).Replace ("\\", "\\\\", StringComparison.Ordinal)
+                                     .Replace ("|", "\\|", StringComparison.Ordinal)
+                                     .Replace ("(", "\\(", StringComparison.Ordinal)
+                                     .Replace (")", "\\)", StringComparison.Ordinal);
+
+    private static string EscapeCellLiteral (string text, bool inLinkLabel)
     {
         StringBuilder escaped = new ();
+        bool escapeUnderscores = Regex.IsMatch (text, @"(?<!\w)_|_(?!\w)");
+        bool escapeBrackets = inLinkLabel || text.Contains ("](", StringComparison.Ordinal);
 
         foreach (char character in text)
         {
-            if ("\\`*_[]|".Contains (character))
+            if ("\\`*|~^=+<&${}".Contains (character)
+                || (character == '_' && escapeUnderscores)
+                || (character is '[' or ']' && escapeBrackets))
             {
                 escaped.Append ('\\');
             }

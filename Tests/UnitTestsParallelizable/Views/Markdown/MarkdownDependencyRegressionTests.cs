@@ -128,7 +128,7 @@ public class MarkdownDependencyRegressionTests
         MarkdownTable table = Assert.Single (view.SubViews.OfType<MarkdownTable> ());
 
         Assert.Equal (["Code", "Cost"], table.TableData.Headers);
-        Assert.Equal (["`value`", "**~$1.50**"], Assert.Single (table.TableData.Rows));
+        Assert.Equal (["`value`", "**\\~\\$1.50**"], Assert.Single (table.TableData.Rows));
     }
 
     [Fact]

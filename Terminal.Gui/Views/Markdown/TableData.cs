@@ -1,12 +1,17 @@
 namespace Terminal.Gui.Views;
 
-/// <summary>Represents the parsed structure of a Markdown table.</summary>
+/// <summary>Represent a Markdown table's cell sources and column alignments.</summary>
+/// <remarks>
+///     Store header and body cells as Markdown inline source, including escapes needed to preserve literal text.
+///     These strings are not display text. Tables lowered from an AST serialize supported inline formatting;
+///     the resulting source can differ from the input while retaining its rendered content and styles.
+/// </remarks>
 public sealed class TableData
 {
     /// <summary>Initializes a new <see cref="TableData"/> from parsed table rows.</summary>
-    /// <param name="headers">The header cell texts.</param>
+    /// <param name="headers">The header cells as Markdown inline source.</param>
     /// <param name="alignments">The column alignments parsed from the separator row.</param>
-    /// <param name="rows">The body row cell texts.</param>
+    /// <param name="rows">The body cells as Markdown inline source.</param>
     public TableData (string [] headers, Alignment [] alignments, string [] [] rows)
     {
         Headers = headers;
@@ -15,13 +20,13 @@ public sealed class TableData
         ColumnCount = headers.Length;
     }
 
-    /// <summary>Gets the header cell texts.</summary>
+    /// <summary>Get the header cells as Markdown inline source.</summary>
     public string [] Headers { get; }
 
     /// <summary>Gets the alignment for each column, parsed from the separator row.</summary>
     public Alignment [] ColumnAlignments { get; }
 
-    /// <summary>Gets the body rows. Each row is an array of cell texts.</summary>
+    /// <summary>Get the body rows. Each cell contains Markdown inline source.</summary>
     public string [] [] Rows { get; }
 
     /// <summary>Gets the number of columns in the table.</summary>
@@ -79,11 +84,31 @@ public sealed class TableData
 
     private static string [] SplitRow (string line)
     {
-        string trimmed = line.Trim ().Trim ('|');
+        string trimmed = line.Trim ();
 
         if (string.IsNullOrEmpty (trimmed))
         {
             return [];
+        }
+
+        if (trimmed.StartsWith ('|'))
+        {
+            trimmed = trimmed [1..];
+        }
+
+        if (trimmed.EndsWith ('|'))
+        {
+            int precedingBackslashes = 0;
+
+            for (int index = trimmed.Length - 2; index >= 0 && trimmed [index] == '\\'; index--)
+            {
+                precedingBackslashes++;
+            }
+
+            if (precedingBackslashes % 2 == 0)
+            {
+                trimmed = trimmed [..^1];
+            }
         }
 
         List<string> cells = [];
