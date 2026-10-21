@@ -391,7 +391,9 @@ public class MarkdownTableTests
             rows.Add ([.. row.Select (Cell)]);
         }
 
-        return MarkdownTable.ComputeColumnWidths (headers, [.. rows], maxWidth);
+        MarkdownTableContent content = new (headers, [.. rows]);
+
+        return MarkdownTable.ComputeColumnWidths (content, maxWidth);
 
         static List<StyledSegment> Cell (string text) => [new StyledSegment (text, MarkdownStyleRole.Normal)];
     }

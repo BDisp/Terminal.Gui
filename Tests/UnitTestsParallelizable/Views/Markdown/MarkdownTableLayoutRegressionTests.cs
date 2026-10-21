@@ -19,6 +19,20 @@ public class MarkdownTableLayoutRegressionTests : TestDriverBase
     }
 
     [Fact]
+    public void Resizing_Preserves_Cached_Width_Bounds_Across_Style_Boundaries ()
+    {
+        MarkdownTableContent content = new ([[new ("H", MarkdownStyleRole.Heading)]],
+                                           [[[new ("long word", MarkdownStyleRole.Normal)]],
+                                            [[new ("abc", MarkdownStyleRole.Normal), new ("def", MarkdownStyleRole.Strong)]]]);
+
+        Assert.Equal ([11], MarkdownTable.ComputeColumnWidths (content, 80));
+        Assert.Equal ([8], MarkdownTable.ComputeColumnWidths (content, 10));
+        Assert.Equal ([11], MarkdownTable.ComputeColumnWidths (content, 80));
+        Assert.Equal ([9], content.MaximumWidths);
+        Assert.Equal ([6], content.MinimumWidths);
+    }
+
+    [Fact]
     public void Tab_Separated_Cell_Draws_The_Long_Word_Without_Splitting_It ()
     {
         using IDriver driver = CreateTestDriver (12, 10);

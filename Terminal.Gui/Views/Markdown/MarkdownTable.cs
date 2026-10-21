@@ -27,6 +27,8 @@ namespace Terminal.Gui.Views;
 /// </remarks>
 public sealed class MarkdownTable : View, IDesignable
 {
+    internal MarkdownTableContent Content { get; private set; } = new ([], []);
+
     private TableData _data = _emptyData;
     private int [] _columnWidths = [];
 
@@ -157,8 +159,10 @@ public sealed class MarkdownTable : View, IDesignable
     internal void SetContent (TableData data, MarkdownTableContent? content, int width)
     {
         _data = data;
-        _headerSegments = content?.Headers ?? ParseCellSegments (data.Headers, MarkdownStyleRole.Heading);
-        _rowSegments = content?.Rows ?? [.. data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal))];
+        Content = content ?? new (ParseCellSegments (data.Headers, MarkdownStyleRole.Heading),
+                                  [.. data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal))]);
+        _headerSegments = Content.Headers;
+        _rowSegments = Content.Rows;
 
         // Keep Text in sync without parsing or laying out discarded intermediate content.
         SetTextDirect (BuildTableText ());
@@ -177,7 +181,7 @@ public sealed class MarkdownTable : View, IDesignable
         }
 
         _lastComputedWidth = maxWidth;
-        _columnWidths = ComputeColumnWidths (_headerSegments, _rowSegments, maxWidth);
+        _columnWidths = ComputeColumnWidths (Content, maxWidth);
 
         _headerRowHeight = ComputeRowHeight (_headerSegments, _columnWidths);
 
@@ -845,7 +849,7 @@ public sealed class MarkdownTable : View, IDesignable
     /// <summary>
     ///     Computes column widths using a Rich-style collapse algorithm:
     ///     <list type="number">
-    ///         <item>Measure each column's min (longest word + padding) and max (full content + padding) widths.</item>
+    ///         <item>Use each column's cached min (longest word + padding) and max (full content + padding) widths.</item>
     ///         <item>If total max fits within <paramref name="maxWidth"/>, use max widths.</item>
     ///         <item>
     ///             Otherwise, iteratively collapse the widest column toward the second-widest.
@@ -855,31 +859,11 @@ public sealed class MarkdownTable : View, IDesignable
     ///         <item>Last resort: reduce all columns evenly if still over budget.</item>
     ///     </list>
     /// </summary>
-    internal static int [] ComputeColumnWidths (List<StyledSegment> [] headers, List<StyledSegment> [] [] rows, int maxWidth)
+    internal static int [] ComputeColumnWidths (MarkdownTableContent content, int maxWidth)
     {
-        int cols = headers.Length;
-        var maxWidths = new int [cols];
-        var minWidths = new int [cols];
-
-        // Measure max (full content) and min (longest word) for each column
-        for (var c = 0; c < cols; c++)
-        {
-            int headerMax = MeasureRenderedWidth (headers [c]);
-            int headerMin = MeasureLongestWord (headers [c]);
-            maxWidths [c] = headerMax;
-            minWidths [c] = headerMin;
-        }
-
-        foreach (List<StyledSegment> [] row in rows)
-        {
-            for (var c = 0; c < cols && c < row.Length; c++)
-            {
-                int cellMax = MeasureRenderedWidth (row [c]);
-                int cellMin = MeasureLongestWord (row [c]);
-                maxWidths [c] = Math.Max (maxWidths [c], cellMax);
-                minWidths [c] = Math.Max (minWidths [c], cellMin);
-            }
-        }
+        int cols = content.Headers.Length;
+        int [] maxWidths = [.. content.MaximumWidths];
+        int [] minWidths = [.. content.MinimumWidths];
 
         // Add padding (1 space each side)
         for (var c = 0; c < cols; c++)
