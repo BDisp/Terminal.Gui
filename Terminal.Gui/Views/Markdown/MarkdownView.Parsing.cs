@@ -8,6 +8,7 @@ using Markdig.Extensions.TaskLists;
 using Markdig.Helpers;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
+using Microsoft.Extensions.Logging;
 
 namespace Terminal.Gui.Views;
 
@@ -34,8 +35,10 @@ public partial class Markdown
         {
             doc = Markdig.Markdown.Parse (_markdown, pipeline);
         }
-        catch (ArgumentException)
+        catch (ArgumentException exception)
         {
+            // Markdig uses ArgumentException for nesting limits; avoid depending on its message.
+            Logging.Logger.LogWarning (exception, "Markdown parsing failed; rendering the source as literal text.");
             doc = new MarkdownDocument ();
             int lineNumber = 0;
 

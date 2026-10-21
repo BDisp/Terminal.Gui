@@ -1,5 +1,6 @@
 using System.Reflection;
 using Markdig;
+using Microsoft.Extensions.Logging;
 using Moq;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
@@ -35,6 +36,46 @@ public class MarkdownParseRecoveryTests
         IntermediateBlock block = Assert.Single (GetField<List<IntermediateBlock>> (view, "_blocks"));
         Assert.Equal ("**literal**", Assert.Single (block.Runs).Text);
         Assert.Equal (MarkdownStyleRole.Normal, block.Runs [0].StyleRole);
+    }
+
+    [Fact]
+    public void Parse_Fallback_Logs_The_Original_Exception ()
+    {
+        ArgumentException failure = new ("custom pipeline failure");
+        MarkdownPipelineBuilder builder = new ();
+        builder.DocumentProcessed += _ => throw failure;
+        Mock<ILogger> logger = new ();
+        using IDisposable scope = Logging.PushLogger (logger.Object);
+        using TgMarkdown view = new ()
+        {
+            MarkdownPipeline = builder.Build (),
+            Text = "literal",
+            Width = 60,
+            Height = 10
+        };
+        view.Layout ();
+
+        Assert.Contains (logger.Invocations, invocation => invocation.Method.Name == nameof (ILogger.Log)
+                                                          && Equals (invocation.Arguments [0], LogLevel.Warning)
+                                                          && ReferenceEquals (invocation.Arguments [3], failure));
+    }
+
+    [Fact]
+    public void Parse_Fallback_Preserves_Blank_Source_Lines ()
+    {
+        MarkdownPipelineBuilder builder = new ();
+        builder.DocumentProcessed += _ => throw new ArgumentException ("parse failure");
+        using TgMarkdown view = new ()
+        {
+            MarkdownPipeline = builder.Build (),
+            Text = "first\n\nthird",
+            Width = 60,
+            Height = 10
+        };
+        view.Layout ();
+
+        Assert.Equal (3, view.LineCount);
+        Assert.Equal (["first", "", "third"], GetField<List<IntermediateBlock>> (view, "_blocks").Select (block => string.Concat (block.Runs.Select (run => run.Text))));
     }
 
     [Fact]
