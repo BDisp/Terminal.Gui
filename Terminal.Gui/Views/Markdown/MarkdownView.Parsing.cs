@@ -391,6 +391,24 @@ public partial class Markdown
 
     private string ExtractCellText (TableCell cell)
     {
+        // Reuse literal source only when reparsing the entire cell preserves its display semantics.
+        if (MarkdownPipeline is { }
+            && cell.Count == 1
+            && cell [0] is ParagraphBlock { Inline.FirstChild: LiteralInline { NextSibling: null } literal })
+        {
+            string original = EscapeCellPipes (GetInlineSource (literal, _markdown).Trim ());
+            List<InlineRun> runs = MarkdownInlineParser.ParseInlines (original, MarkdownStyleRole.Normal);
+
+            if (string.Concat (runs.Select (run => run.Text)) == literal.Content.ToString ()
+                && runs.All (run => run.StyleRole == MarkdownStyleRole.Normal
+                                    && run.AdditionalStyle == TextStyle.None
+                                    && run.Url is null
+                                    && run.ImageSource is null))
+            {
+                return original;
+            }
+        }
+
         StringBuilder source = new ();
 
         foreach (Block block in cell)

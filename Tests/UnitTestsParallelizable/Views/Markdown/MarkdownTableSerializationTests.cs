@@ -8,6 +8,35 @@ namespace ViewsTests.Markdown;
 // CoPilot - GPT-6
 public class MarkdownTableSerializationTests
 {
+    [Fact]
+    public void Custom_Pipeline_Table_Copy_Keeps_Ordinary_Punctuation_Readable ()
+    {
+        using TgMarkdown view = new ()
+        {
+            MarkdownPipeline = new MarkdownPipelineBuilder ().UsePipeTables ().Build (),
+            Text = "before\n\n| H |\n| --- |\n| Hello, world. |\n\nafter",
+            Width = 60,
+            Height = 20
+        };
+        view.Layout ();
+        MarkdownTable table = Assert.Single (view.SubViews.OfType<MarkdownTable> ());
+        view.NewMouseEvent (new Mouse
+        {
+            Position = new Point (0, table.Frame.Y),
+            Flags = MouseFlags.LeftButtonPressed
+        });
+        view.NewMouseEvent (new Mouse
+        {
+            Position = new Point (59, table.Frame.Y + table.RenderedHeight - 1),
+            Flags = MouseFlags.LeftButtonPressed | MouseFlags.PositionReport
+        });
+        string copied = Assert.IsType<string> (view.SelectedText);
+        TableData data = Assert.IsType<TableData> (TableData.TryParse (copied.Split ('\n')));
+
+        Assert.Contains ("Hello, world.", copied);
+        Assert.Equal ("Hello, world.", string.Concat (MarkdownInlineParser.ParseInlines (data.Rows [0] [0], MarkdownStyleRole.Normal).Select (run => run.Text)));
+    }
+
     [Theory]
     [InlineData (false, false)]
     [InlineData (true, false)]
