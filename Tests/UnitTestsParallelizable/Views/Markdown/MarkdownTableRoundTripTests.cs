@@ -1,4 +1,3 @@
-using System.Reflection;
 using UnitTests;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
@@ -48,8 +47,7 @@ public class MarkdownTableRoundTripTests : TestDriverBase
             Width = 60
         };
         standalone.Layout ();
-        FieldInfo widths = typeof (MarkdownTable).GetField ("_columnWidths", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        Assert.Equal ((int [])widths.GetValue (table)!, (int [])widths.GetValue (standalone)!);
+        Assert.Equal (MarkdownTable.ComputeColumnWidths (table.Content, 60), MarkdownTable.ComputeColumnWidths (standalone.Content, 60));
         standalone.Draw ();
 
         Assert.Equal (expected, ReadCellText ());

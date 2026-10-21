@@ -1,10 +1,10 @@
-using System.Reflection;
+using UnitTests;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
 namespace ViewsTests.Markdown;
 
 // CoPilot - GPT-6
-public class MarkdownInlineRoundTripTests
+public class MarkdownInlineRoundTripTests : TestDriverBase
 {
     [Theory]
     [InlineData ("**a\\|b**", "a|b", MarkdownStyleRole.Strong)]
@@ -155,16 +155,18 @@ public class MarkdownInlineRoundTripTests
     [Fact]
     public void Linked_Code_Outside_Tables_Preserves_Literal_Backslash ()
     {
+        using IDriver driver = CreateTestDriver (60, 10);
         using TgMarkdown view = new ()
         {
+            Driver = driver,
             Text = "[`a\\|b`](u)",
             Width = 60,
             Height = 10
         };
         view.Layout ();
-        List<IntermediateBlock> blocks = (List<IntermediateBlock>)typeof (TgMarkdown).GetField ("_blocks", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue (view)!;
+        view.Draw ();
 
-        Assert.Equal ("a\\|b", Assert.Single (Assert.Single (blocks).Runs).Text);
+        Assert.Equal ("a\\|b", string.Concat (Enumerable.Range (0, 4).Select (column => driver.Contents! [0, column].Grapheme)));
     }
 
     private static TgMarkdown CreateTable (string cell)
@@ -180,8 +182,7 @@ public class MarkdownInlineRoundTripTests
         return view;
     }
 
-    private static List<StyledSegment> GetBody (MarkdownTable table) =>
-        ((List<StyledSegment> [] [])typeof (MarkdownTable).GetField ("_rowSegments", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue (table)!) [0] [0];
+    private static List<StyledSegment> GetBody (MarkdownTable table) => table.Content.Rows [0] [0];
 
     private static IEnumerable<(string, MarkdownStyleRole, string?, string?, TextStyle, VisualRole?)> Expand (IEnumerable<StyledSegment> segments) =>
         segments.SelectMany (segment => GraphemeHelper.GetGraphemes (segment.Text)

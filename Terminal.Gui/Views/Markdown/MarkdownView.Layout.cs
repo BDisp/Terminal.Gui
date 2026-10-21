@@ -264,7 +264,7 @@ public partial class Markdown
         return new RenderedLine (segments, false, width, block.IsCodeBlock, block.IsThematicBreak, codeLanguage: block.Language);
     }
 
-    private static List<RenderedLine> WrapBlock (IntermediateBlock block, int viewportWidth)
+    internal static List<RenderedLine> WrapBlock (IntermediateBlock block, int viewportWidth)
     {
         List<RenderedLine> lines = [];
 

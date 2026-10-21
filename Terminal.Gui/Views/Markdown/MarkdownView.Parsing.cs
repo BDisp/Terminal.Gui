@@ -797,7 +797,7 @@ public partial class Markdown
         }
     }
 
-    private static int GetBlockEndLine (Block block) =>
+    internal static int GetBlockEndLine (Block block) =>
         block switch
         {
             FencedCodeBlock fcb => fcb.Line + fcb.Lines.Count + 1, // opening fence + content + closing fence

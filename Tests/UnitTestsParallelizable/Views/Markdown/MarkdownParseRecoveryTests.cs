@@ -1,17 +1,18 @@
-using System.Reflection;
 using Markdig;
 using Microsoft.Extensions.Logging;
 using Moq;
+using UnitTests;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
 namespace ViewsTests.Markdown;
 
 // CoPilot - GPT-6
-public class MarkdownParseRecoveryTests
+public class MarkdownParseRecoveryTests : TestDriverBase
 {
     [Fact]
     public void Parse_ArgumentException_Does_Not_Depend_On_Message ()
     {
+        using IDriver driver = CreateTestDriver (60, 10);
         int parses = 0;
         MarkdownPipelineBuilder builder = new ();
         builder.DocumentProcessed += _ =>
@@ -22,6 +23,7 @@ public class MarkdownParseRecoveryTests
                                      };
         using TgMarkdown view = new ()
         {
+            Driver = driver,
             Text = "**literal**",
             MarkdownPipeline = builder.Build (),
             Width = 60,
@@ -31,11 +33,10 @@ public class MarkdownParseRecoveryTests
         view.Width = 40;
         view.Layout ();
 
+        view.Draw ();
+
         Assert.Equal (1, parses);
-        Assert.True (GetField<bool> (view, "_parsed"));
-        IntermediateBlock block = Assert.Single (GetField<List<IntermediateBlock>> (view, "_blocks"));
-        Assert.Equal ("**literal**", Assert.Single (block.Runs).Text);
-        Assert.Equal (MarkdownStyleRole.Normal, block.Runs [0].StyleRole);
+        Assert.Equal ("**literal**", ReadRow (driver, 0));
     }
 
     [Fact]
@@ -63,19 +64,23 @@ public class MarkdownParseRecoveryTests
     [Fact]
     public void Parse_Fallback_Preserves_Blank_Source_Lines ()
     {
+        using IDriver driver = CreateTestDriver (60, 10);
         MarkdownPipelineBuilder builder = new ();
         builder.DocumentProcessed += _ => throw new ArgumentException ("parse failure");
         using TgMarkdown view = new ()
         {
             MarkdownPipeline = builder.Build (),
+            Driver = driver,
             Text = "first\n\nthird",
             Width = 60,
             Height = 10
         };
         view.Layout ();
 
+        view.Draw ();
+
         Assert.Equal (3, view.LineCount);
-        Assert.Equal (["first", "", "third"], GetField<List<IntermediateBlock>> (view, "_blocks").Select (block => string.Concat (block.Runs.Select (run => run.Text))));
+        Assert.Equal (["first", "", "third"], Enumerable.Range (0, 3).Select (row => ReadRow (driver, row)));
     }
 
     [Fact]
@@ -93,9 +98,7 @@ public class MarkdownParseRecoveryTests
         view.Text = new string ('>', 20);
         view.Layout ();
 
-        Assert.True (GetField<bool> (view, "_parsed"));
-        Assert.Empty (GetField<Dictionary<string, int>> (view, "_slugCounts"));
-        Assert.Empty (GetField<Dictionary<string, int>> (view, "_headingAnchors"));
+        Assert.Equal (1, view.LineCount);
         Assert.False (view.ScrollToAnchor ("old"));
 
         view.Text = "# Old\n\n# Old";
@@ -127,6 +130,6 @@ public class MarkdownParseRecoveryTests
         Assert.Equal ("lowering", exception.Message);
     }
 
-    private static T GetField<T> (TgMarkdown view, string name) =>
-        (T)typeof (TgMarkdown).GetField (name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue (view)!;
+    private static string ReadRow (IDriver driver, int row) =>
+        string.Concat (Enumerable.Range (0, driver.Screen.Width).Select (column => driver.Contents! [row, column].Grapheme)).TrimEnd ();
 }

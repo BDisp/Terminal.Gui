@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Tables;
@@ -42,9 +41,7 @@ public class MarkdownDependencyRegressionTests
     public void DefinitionList_End_Line_Includes_The_Definition ()
     {
         Markdig.Syntax.MarkdownDocument document = Markdig.Markdown.Parse ("Term\n: def", new MarkdownPipelineBuilder ().UseAdvancedExtensions ().Build ());
-        MethodInfo getEndLine = typeof (Terminal.Gui.Views.Markdown).GetMethod ("GetBlockEndLine", BindingFlags.Static | BindingFlags.NonPublic)!;
-
-        Assert.Equal (1, getEndLine.Invoke (null, [Assert.Single (document)]));
+        Assert.Equal (1, Terminal.Gui.Views.Markdown.GetBlockEndLine (Assert.Single (document)));
     }
 
     [Fact]

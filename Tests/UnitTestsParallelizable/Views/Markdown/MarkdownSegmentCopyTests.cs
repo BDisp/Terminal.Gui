@@ -1,4 +1,3 @@
-using System.Reflection;
 using TgMarkdown = Terminal.Gui.Views.Markdown;
 
 namespace ViewsTests.Markdown;
@@ -32,8 +31,7 @@ public class MarkdownSegmentCopyTests
             AdditionalStyle = TextStyle.Bold | TextStyle.Italic
         };
         List<StyledSegment> output = [];
-        MethodInfo add = typeof (CodeRoleLegendHighlighter).GetMethod ("AddRoleSegments", BindingFlags.Static | BindingFlags.NonPublic)!;
-        add.Invoke (null, [output, source]);
+        CodeRoleLegendHighlighter.AddRoleSegments (output, source);
         StyledSegment segment = Assert.Single (output);
 
         Assert.Equal (source.AdditionalStyle, segment.AdditionalStyle);

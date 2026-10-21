@@ -68,12 +68,12 @@ public class MarkdownParsedContentTests : TestDriverBase
         Assert.Equal ("``a`b``", table.TableData.Rows [0] [0]);
     }
 
-    [Theory]
-    [InlineData (false)]
-    [InlineData (true)]
-    public void Table_Nested_Label_Activates_Original_Url (bool mouse)
+    [Fact]
+    public void Table_Nested_Label_Keyboard_Activation_Uses_Original_Url ()
     {
         const string url = "https://example.com/path_(part)";
+
+        // Exercise application keyboard focus here; rendering and mouse tests use plain drivers.
         using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
         using Runnable window = BeginTable (app, $"[Testing [Header]]({url})", out TgMarkdown markdown);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
@@ -84,29 +84,44 @@ public class MarkdownParsedContentTests : TestDriverBase
                                     e.Handled = true;
                                 };
 
-        if (mouse)
-        {
-            table.NewMouseEvent (new Mouse { Position = new Point (2, 3), Flags = MouseFlags.LeftButtonClicked });
-        }
-        else
-        {
-            table.SetFocus ();
-            table.InvokeCommand (Command.Accept);
-        }
+        table.SetFocus ();
+        table.InvokeCommand (Command.Accept);
 
         Assert.Equal ([url], activated);
+    }
+
+    [Fact]
+    public void Table_Nested_Label_Mouse_Activation_Uses_Original_Url ()
+    {
+        const string url = "https://example.com/path_(part)";
+        using IDriver driver = CreateTestDriver (60, 20);
+        using TgMarkdown markdown = CreateTable ($"[Testing [Header]]({url})", driver);
+        MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
+        string? activated = null;
+        markdown.LinkClicked += (_, e) =>
+                                {
+                                    activated = e.Url;
+                                    e.Handled = true;
+                                };
+        table.NewMouseEvent (new Mouse
+        {
+            Position = new Point (2, 3),
+            Flags = MouseFlags.LeftButtonClicked
+        });
+
+        Assert.Equal (url, activated);
     }
 
     [Fact]
     public void Table_Wrapping_Preserves_Styles_And_Original_Link ()
     {
         const string url = "https://example.com/path_(part)";
-        using IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
-        using Runnable window = BeginTable (app, $"[**abcdefghij**]({url})", out TgMarkdown markdown, 9);
+        using IDriver driver = CreateTestDriver (9, 20);
+        using TgMarkdown markdown = CreateTable ($"[**abcdefghij**]({url})", driver, 9);
         MarkdownTable table = Assert.Single (markdown.SubViews.OfType<MarkdownTable> ());
         Assert.True (table.RenderedHeight > 5);
         Point position = table.ViewportToScreen (new Point (2, 4));
-        TextStyle actual = app.Driver!.Contents! [position.Y, position.X].Attribute!.Value.Style;
+        TextStyle actual = driver.Contents! [position.Y, position.X].Attribute!.Value.Style;
         Assert.Equal (TextStyle.Bold | TextStyle.Underline, actual & (TextStyle.Bold | TextStyle.Underline));
         string? activated = null;
         markdown.LinkClicked += (_, e) =>
@@ -172,13 +187,13 @@ public class MarkdownParsedContentTests : TestDriverBase
         Assert.Contains ("> > nested", plain);
     }
 
-    private static TgMarkdown CreateTable (string source, IDriver? driver = null)
+    private static TgMarkdown CreateTable (string source, IDriver? driver = null, int width = 60)
     {
         TgMarkdown markdown = new ()
         {
             Driver = driver,
             Text = $"| Cell |\n| --- |\n| {source} |",
-            Width = 60,
+            Width = width,
             Height = 20
         };
         markdown.Layout ();
