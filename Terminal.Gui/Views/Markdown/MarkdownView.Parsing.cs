@@ -63,7 +63,6 @@ public partial class Markdown
     private void LowerFromAst (MarkdownDocument doc)
     {
         _slugCounts = new Dictionary<string, int> (StringComparer.OrdinalIgnoreCase);
-        _headingAnchors.Clear ();
 
         Block? prevBlock = null;
 
