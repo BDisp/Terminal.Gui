@@ -722,14 +722,15 @@ public sealed class MarkdownTable : View, IDesignable
 
             while (remaining.Length > 0)
             {
-                int spaceIdx = remaining.IndexOf (' ');
+                int spaceIdx = remaining.IndexOfAny ([' ', '\t', '\n']);
+                bool endsLine = spaceIdx >= 0 && remaining [spaceIdx] == '\n';
                 string word;
                 string trailing;
 
                 if (spaceIdx >= 0)
                 {
                     word = remaining [..spaceIdx];
-                    trailing = " ";
+                    trailing = endsLine ? string.Empty : " ";
                     remaining = remaining [(spaceIdx + 1)..];
                 }
                 else
@@ -769,13 +770,20 @@ public sealed class MarkdownTable : View, IDesignable
                     currentWidth = 0;
 
                     int usedChars = hardChunk.TrimEnd ().Length;
-                    remaining = chunk [usedChars..].TrimStart () + remaining;
+                    remaining = chunk [usedChars..].TrimStart () + (endsLine ? "\n" : string.Empty) + remaining;
 
                     continue;
                 }
 
                 currentLine.Add (segment.WithText (chunk));
                 currentWidth += chunkWidth;
+
+                if (endsLine)
+                {
+                    lines.Add (currentLine);
+                    currentLine = [];
+                    currentWidth = 0;
+                }
             }
         }
 
