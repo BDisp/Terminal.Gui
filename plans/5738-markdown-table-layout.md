@@ -6,6 +6,8 @@ Implementation plan, prepared 2026-10-21 against `develop` at `3f65bcb5c`, which
 
 This plan covers [issue #5738](https://github.com/tui-cs/Terminal.Gui/issues/5738). The steps below are proposed work; no library implementation or test execution is claimed by this document.
 
+Implementation results are recorded in [5738-validation.md](5738-validation.md).
+
 ## Problem statement
 
 Markdig already parses column preferences, explicit header status, spans, and blocks inside grid cells. Terminal.Gui loses this structure while lowering the AST. Its table renderer then independently reconstructs geometry for measurement, drawing, links, and selection. Extending each of those calculations independently would make spans and resizing unreliable.
