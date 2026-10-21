@@ -3,8 +3,10 @@ namespace Terminal.Gui.Views;
 /// <summary>Represents a Markdown table's cell sources and column alignments.</summary>
 /// <remarks>
 ///     Header and body cells contain Markdown inline source, including escapes needed to preserve literal text.
-///     These strings are not display text. Tables lowered from an AST serialize supported inline formatting;
-///     the resulting source can differ from the input while retaining its rendered content and styles.
+///     These strings are not display text. Tables lowered from an AST retain inline source where possible,
+///     expand resolved links with their titles, and encode transformed literals to preserve display semantics.
+///     Cell paragraphs and soft breaks are separated by spaces; hard breaks use newline character entities.
+///     The resulting source can differ from the input while retaining its rendered content and styles.
 /// </remarks>
 public sealed class TableData
 {

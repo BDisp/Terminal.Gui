@@ -16,8 +16,6 @@ public partial class Markdown
 {
     private static readonly MarkdownPipeline _defaultPipeline = new MarkdownPipelineBuilder ().UseAdvancedExtensions ().Build ();
     private static readonly Regex _htmlTagPattern = new ("<[^>]+>", RegexOptions.Compiled);
-    private static readonly Regex _codeBacktickPattern = new ("`+", RegexOptions.Compiled);
-    private static readonly Regex _cellUnderscorePattern = new (@"(?<!\w)_|_(?!\w)", RegexOptions.Compiled);
 
     private Dictionary<string, int> _slugCounts = new (StringComparer.OrdinalIgnoreCase);
 
@@ -394,114 +392,182 @@ public partial class Markdown
 
     private string ExtractCellText (TableCell cell)
     {
-        // Keep the public text model and clipboard representation in sync. Rendering
-        // uses ExtractCellSegments so this serialization does not control display fidelity.
-        StringBuilder sb = new ();
+        StringBuilder source = new ();
 
-        foreach (Block child in cell)
+        foreach (Block block in cell)
         {
-            if (child is ParagraphBlock para)
+            if (block is not ParagraphBlock paragraph)
             {
-                AppendInlineText (para.Inline?.FirstChild, sb, _markdown);
+                continue;
             }
+
+            if (source.Length > 0)
+            {
+                source.Append (' ');
+            }
+
+            AppendInlineSource (paragraph.Inline?.FirstChild, source);
         }
 
-        return sb.ToString ().Trim ();
+        return EscapeCellPipes (source.ToString ().Trim ());
     }
 
-    private static void AppendInlineText (Inline? inline, StringBuilder sb, string source, bool inLinkLabel = false)
+    private static string EscapeCellPipes (string source)
+    {
+        if (!source.Contains ('|'))
+        {
+            return source;
+        }
+
+        // Grid cells can contain raw pipes; clipboard rows always use pipe-table syntax.
+        StringBuilder escaped = new (source.Length);
+        int backslashes = 0;
+
+        foreach (char character in source)
+        {
+            if (character == '|' && backslashes % 2 == 0)
+            {
+                escaped.Append ('\\');
+            }
+
+            escaped.Append (character);
+            backslashes = character == '\\' ? backslashes + 1 : 0;
+        }
+
+        return escaped.ToString ();
+    }
+
+    private void AppendInlineSource (Inline? inline, StringBuilder source)
     {
         while (inline is { })
         {
+            string original = GetInlineSource (inline, _markdown);
+
             switch (inline)
             {
-                case LiteralInline lit:
-                    sb.Append (EscapeCellLiteral (lit.Content.ToString (), inLinkLabel, inline.NextSibling is LinkInline { IsImage: false }));
+                case LiteralInline literal:
+                    string text = literal.Content.ToString ();
+
+                    // Encode custom-pipeline literals so reparsing cannot enable other extensions.
+                    if (MarkdownPipeline is { })
+                    {
+                        source.Append (EncodeCellLiteral (text));
+
+                        break;
+                    }
+
+                    source.Append (literal.IsFirstCharacterEscaped && original.Length > 0 ? original : text);
 
                     break;
 
-                case EmphasisInline em:
-                    var delim = new string (em.DelimiterChar, em.DelimiterCount);
-                    sb.Append (delim);
-                    AppendInlineText (em.FirstChild, sb, source, inLinkLabel);
-                    sb.Append (delim);
+                case EmphasisInline emphasis:
+                    string marker = new (emphasis.DelimiterChar, emphasis.DelimiterCount);
+                    source.Append (marker);
+                    AppendInlineSource (emphasis.FirstChild, source);
+                    source.Append (marker);
 
                     break;
 
                 case CodeInline code:
-                    int backticks = _codeBacktickPattern.Matches (code.Content).Select (match => match.Length).DefaultIfEmpty (0).Max ();
-                    string delimiter = new ('`', backticks + 1);
-                    bool padCode = code.Content.StartsWith ('`') || code.Content.EndsWith ('`')
-                                   || (code.Content.StartsWith (' ') && code.Content.EndsWith (' ') && !string.IsNullOrWhiteSpace (code.Content));
-                    sb.Append (delimiter);
-
-                    if (padCode)
+                    if (original.Length > 0 && !original.Contains ('\n') && !original.Contains ('\r'))
                     {
-                        sb.Append (' ');
+                        source.Append (original);
+
+                        break;
                     }
 
-                    sb.Append (code.Content.Replace ("\\|", "|", StringComparison.Ordinal).Replace ("|", "\\|", StringComparison.Ordinal));
-
-                    if (padCode)
-                    {
-                        sb.Append (' ');
-                    }
-
-                    sb.Append (delimiter);
-
-                    break;
-
-                case LinkInline { IsImage: true } link:
-                    sb.Append ("![");
-                    AppendInlineText (link.FirstChild, sb, source, inLinkLabel: true);
-                    sb.Append ("](");
-                    sb.Append (EscapeCellDestination (link.Url));
-                    sb.Append (')');
+                    AppendCellCode (source, code.Content);
 
                     break;
 
                 case LinkInline link:
-                    sb.Append ('[');
-                    AppendInlineText (link.FirstChild, sb, source, inLinkLabel: true);
-                    sb.Append ("](");
-                    sb.Append (EscapeCellDestination (link.Url));
-                    sb.Append (')');
+                    source.Append (link.IsImage ? "![" : "[");
+                    AppendInlineSource (link.FirstChild, source);
+                    source.Append ("](<");
+                    source.Append (EscapeCellDestination (link.Url));
+                    source.Append ('>');
+
+                    if (link.Title is { })
+                    {
+                        source.Append (" \"");
+                        source.Append (EncodeCellLiteral (link.Title));
+                        source.Append ('"');
+                    }
+
+                    source.Append (')');
 
                     break;
 
                 case HtmlEntityInline entity:
-                    sb.Append (EscapeCellLiteral (entity.Transcoded.ToString (), inLinkLabel, inline.NextSibling is LinkInline { IsImage: false }));
+                    source.Append (original.Length > 0 ? original : EncodeCellLiteral (entity.Transcoded.ToString ()));
 
                     break;
 
                 case AbbreviationInline abbreviation:
-                    sb.Append (abbreviation.Abbreviation.Label);
+                    source.Append (EncodeCellLiteral (abbreviation.Abbreviation.Label ?? string.Empty));
 
                     break;
 
                 case AutolinkInline auto:
-                    sb.Append (auto.Url);
+                    source.Append (original.Length > 0 ? original : $"<{EscapeCellDestination (auto.Url)}>");
 
                     break;
 
-                case ContainerInline container:
-                    AppendInlineText (container.FirstChild, sb, source, inLinkLabel);
+                case LineBreakInline lineBreak:
+                    // Keep a pipe-table row on one physical line, including explicit hard breaks.
+                    source.Append (lineBreak.IsHard ? "&#10;" : " ");
 
                     break;
 
-                case HtmlInline or LineBreakInline:
-                    // Preserve the existing omission of HTML tags and cell line-break markers.
+                case HtmlInline:
+                    // Match the display path, which omits inline HTML tags.
 
                     break;
 
-                case LeafInline unknown:
-                    sb.Append (EscapeCellLiteral (GetInlineSource (unknown, source), inLinkLabel));
+                case ContainerInline group:
+                    AppendInlineSource (group.FirstChild, source);
+
+                    break;
+
+                case LeafInline:
+                    source.Append (EncodeCellLiteral (original));
 
                     break;
             }
 
             inline = inline.NextSibling;
         }
+    }
+
+    private static void AppendCellCode (StringBuilder source, string content)
+    {
+        int longestRun = 0;
+        int currentRun = 0;
+
+        foreach (char character in content)
+        {
+            currentRun = character == '`' ? currentRun + 1 : 0;
+            longestRun = Math.Max (longestRun, currentRun);
+        }
+
+        string delimiter = new ('`', longestRun + 1);
+        bool pad = content.StartsWith ('`') || content.EndsWith ('`')
+                   || (content.StartsWith (' ') && content.EndsWith (' ') && !string.IsNullOrWhiteSpace (content));
+        source.Append (delimiter);
+
+        if (pad)
+        {
+            source.Append (' ');
+        }
+
+        source.Append (content.Replace ("\\|", "|", StringComparison.Ordinal).Replace ("|", "\\|", StringComparison.Ordinal));
+
+        if (pad)
+        {
+            source.Append (' ');
+        }
+
+        source.Append (delimiter);
     }
 
     private static string GetInlineSource (Inline inline, string source) =>
@@ -513,30 +579,28 @@ public partial class Markdown
         (destination ?? string.Empty).Replace ("\\", "\\\\", StringComparison.Ordinal)
                                      .Replace ("|", "\\|", StringComparison.Ordinal)
                                      .Replace ("(", "\\(", StringComparison.Ordinal)
-                                     .Replace (")", "\\)", StringComparison.Ordinal);
+                                     .Replace (")", "\\)", StringComparison.Ordinal)
+                                     .Replace ("<", "\\<", StringComparison.Ordinal)
+                                     .Replace (">", "\\>", StringComparison.Ordinal);
 
-    private static string EscapeCellLiteral (string text, bool inLinkLabel, bool followedByLink = false)
+    private static string EncodeCellLiteral (string text)
     {
-        StringBuilder escaped = new ();
-        bool escapeUnderscores = _cellUnderscorePattern.IsMatch (text);
-        bool escapeBrackets = inLinkLabel || text.Contains ("](", StringComparison.Ordinal);
+        StringBuilder source = new ();
 
-        for (int index = 0; index < text.Length; index++)
+        foreach (char character in text)
         {
-            char character = text [index];
-
-            if ("\\`*|~^=+<&${}".Contains (character)
-                || (character == '!' && index == text.Length - 1 && followedByLink)
-                || (character == '_' && escapeUnderscores)
-                || (character is '[' or ']' && escapeBrackets))
+            if (!character.IsAsciiPunctuation ())
             {
-                escaped.Append ('\\');
+                source.Append (character);
+
+                continue;
             }
 
-            escaped.Append (character);
+            // Encode punctuation systematically so literal text cannot enable inline extensions.
+            source.Append ("&#").Append ((int)character).Append (';');
         }
 
-        return escaped.ToString ();
+        return source.ToString ();
     }
 
     private void HandleHtmlBlock (HtmlBlock html, string prefix, string contPrefix, MarkdownStyleRole defaultRole)
