@@ -34,17 +34,22 @@ public partial class Markdown
         {
             doc = Markdig.Markdown.Parse (_markdown, pipeline);
         }
-        catch (ArgumentException exception) when (exception.Message.StartsWith ("Markdown elements in the input are too deeply nested", StringComparison.Ordinal))
+        catch (ArgumentException)
         {
-            // Keep the configured parser limit while rendering rejected input as literal text.
+            doc = new MarkdownDocument ();
+            int lineNumber = 0;
+
+            // Lower literal paragraphs through the same state-reset and layout path as parsed input.
             foreach (string line in _markdown.Replace ("\r\n", "\n", StringComparison.Ordinal).Replace ('\r', '\n').Split ('\n'))
             {
-                _blocks.Add (new IntermediateBlock ([new InlineRun (line, MarkdownStyleRole.Normal)], true));
+                ContainerInline inline = new ();
+                inline.AppendChild (new LiteralInline (line));
+                doc.Add (new ParagraphBlock
+                {
+                    Line = lineNumber++,
+                    Inline = inline
+                });
             }
-
-            _parsed = true;
-
-            return;
         }
 
         LowerFromAst (doc);
@@ -55,6 +60,7 @@ public partial class Markdown
     private void LowerFromAst (MarkdownDocument doc)
     {
         _slugCounts = new Dictionary<string, int> (StringComparer.OrdinalIgnoreCase);
+        _headingAnchors.Clear ();
 
         Block? prevBlock = null;
 
