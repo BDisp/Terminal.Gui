@@ -30,14 +30,16 @@ extension registration is retained. The default pipeline remains unchanged.
 Markdig supplies grid-table proportions directly from source column widths.
 
 Widths describe **content space**. Each column also has one space of padding on
-each side, and each border track occupies one terminal cell. A table with `n`
-columns occupies `sum(content widths) + 3*n + 1` cells. A cell spanning `k`
+each side, and each border track occupies one terminal cell. For `n` columns,
+the allocated tracks require `sum(content widths) + 3*n + 1` cells. A cell spanning `k`
 columns reclaims `3*(k - 1)` cells of intermediate padding and separators.
 
 Without positive preferences, ordinary tables retain content-driven sizing:
 use natural widths when they fit, collapse wider columns toward their longest
-words, then split long words if necessary. Left columns win ties. Unused space
-inside a wider view is outside the final cell; it is never a link target.
+words, then split long words if necessary. Left columns win ties. The outer right
+border still reaches the view edge for compatibility. Any trailing space between
+the final cell's allocated track and that border belongs to no cell or link;
+alignment uses the allocated track, not the outer border.
 
 With preferences:
 
@@ -136,7 +138,9 @@ and is not promised to round-trip through that setter.
 - Complete ordinary tables inside a larger selection use safe pipe-table source,
   retaining original inferred separator proportions where available.
 - Complete parsed grid tables return their original table block source, including
-  spans and block content. External reference definitions remain external.
+  spans and block content. Enclosing quote markers and list indentation are
+  removed so the copied table can stand alone. External reference definitions
+  remain external.
 - Partial table selections return visible text in display-row order. Borders are
   omitted; intervening alignment/padding spaces and selected line breaks remain;
   trailing layout padding is trimmed. A partial selection no longer expands to

@@ -377,9 +377,7 @@ public partial class Markdown
 
             return new TableColumnData (alignment, definition?.Width);
         })];
-        string original = table.Span.Start >= 0 && table.Span.End >= table.Span.Start && table.Span.End < _markdown.Length
-                              ? _markdown [table.Span.Start..(table.Span.End + 1)].TrimEnd ('\r', '\n')
-                              : string.Empty;
+        string original = MarkdownTableSource.Extract (table, _markdown);
         TableData data = new (columns, rows, grid, grid, original);
         MarkdownTableContent content = new (data, cells);
         _blocks.Add (new ([new ("", MarkdownStyleRole.Table)], false, tableData: data, tableContent: content));

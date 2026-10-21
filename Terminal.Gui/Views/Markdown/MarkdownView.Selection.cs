@@ -270,11 +270,8 @@ public partial class Markdown
 
         int lastLine = _renderedLines.Count - 1;
 
-        // For a document ending with a zero-width placeholder (table rows, thematic breaks),
-        // GetLineDisplayWidth(lastLine) returns 0, so end.X >= 0 is always satisfied.
-        // This is intentional: any position on a zero-width row is equivalent to the end of
-        // that row (there is no content there), so reaching the last row from (0,0) means the
-        // entire document is selected.
+        // Table rows carry their layout width; reaching their first column is not SelectAll.
+        // A thematic break has no text width, so any position on its row reaches its end.
         return end.Y >= lastLine && end.X >= GetLineDisplayWidth (lastLine);
     }
 

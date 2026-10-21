@@ -274,19 +274,25 @@ internal static class MarkdownTableLayoutEngine
             int end = first + cell.Definition.ColumnSpan;
             int reclaimed = 3 * (cell.Definition.ColumnSpan - 1);
             List<StyledSegment> segments = [];
+            int minimumWidth = 1;
+            int naturalWidth = 1;
 
             foreach (IntermediateBlock block in cell.Blocks)
             {
+                List<StyledSegment> runs = [.. block.Runs.Select (run => run.ToStyledSegment ())];
+                int indent = Math.Max (block.Prefix.GetColumns (), block.ContinuationPrefix.GetColumns ());
+                minimumWidth = Math.Max (minimumWidth, indent + MarkdownTable.MeasureLongestWord (runs));
+                naturalWidth = Math.Max (naturalWidth, indent + MarkdownTable.MeasureRenderedWidth (runs));
                 segments.Add (new (block.Prefix, MarkdownStyleRole.Normal));
-                segments.AddRange (block.Runs.Select (run => run.ToStyledSegment ()));
+                segments.AddRange (runs);
                 segments.Add (new ("\n", MarkdownStyleRole.Normal));
             }
 
             string text = string.Concat (segments.Select (segment => segment.Text));
             int hardWidth = GraphemeHelper.GetGraphemes (text).Select (grapheme => grapheme.GetColumns ()).DefaultIfEmpty (1).Max ();
             Constrain (hard, Math.Max (1, hardWidth));
-            Constrain (minimum, Math.Max (hardWidth, MarkdownTable.MeasureLongestWord (segments)));
-            Constrain (natural, Math.Max (hardWidth, MarkdownTable.MeasureRenderedWidth (segments)));
+            Constrain (minimum, Math.Max (hardWidth, minimumWidth));
+            Constrain (natural, Math.Max (hardWidth, naturalWidth));
 
             void Constrain (int [] bounds, int required)
             {

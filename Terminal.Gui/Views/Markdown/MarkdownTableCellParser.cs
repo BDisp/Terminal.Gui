@@ -45,19 +45,28 @@ internal static class MarkdownTableCellParser
         {
             if (block is ListBlock list)
             {
+                bool firstItem = true;
+
                 foreach (ListItemBlock item in list.Cast<ListItemBlock> ())
                 {
+                    if (!firstItem && list.IsLoose)
+                    {
+                        output.Add (new ([], true));
+                    }
+
                     string marker = list.IsOrdered ? $"{item.Order}. " : "• ";
+                    string itemPrefix = (firstItem ? prefix : continuation) + marker;
                     string indent = continuation + new string (' ', marker.GetColumns ());
+                    firstItem = false;
 
                     if (item.Count == 0)
                     {
-                        output.Add (new ([], true, prefix + marker, indent));
+                        output.Add (new ([], true, itemPrefix, indent));
 
                         continue;
                     }
 
-                    VisitSequence (item, prefix + marker, indent, list.IsLoose);
+                    VisitSequence (item, itemPrefix, indent, list.IsLoose);
                 }
 
                 return;

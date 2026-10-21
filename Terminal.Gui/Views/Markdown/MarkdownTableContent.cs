@@ -102,9 +102,23 @@ internal sealed class MarkdownTableContent
     public int [] MaximumWidths { get; }
     public int [] MinimumWidths { get; }
 
+    private ISyntaxHighlighter? _highlightedWith;
+    private MarkdownTableContent? _highlightedContent;
+
     public MarkdownTableContent WithHighlighter (ISyntaxHighlighter? highlighter)
     {
         if (highlighter is null)
+        {
+            return this;
+        }
+
+        // The owning parsed block retains this content across width-only rebuilds.
+        if (ReferenceEquals (_highlightedWith, highlighter) && _highlightedContent is { } cached)
+        {
+            return cached;
+        }
+
+        if (!Cells.Any (cell => cell.Blocks.Any (block => block.IsCodeBlock)))
         {
             return this;
         }
@@ -140,6 +154,9 @@ internal sealed class MarkdownTableContent
             highlighted.Add (new (cell.Row, cell.Definition, blocks));
         }
 
-        return new (Data, highlighted);
+        _highlightedWith = highlighter;
+        _highlightedContent = new (Data, highlighted);
+
+        return _highlightedContent;
     }
 }

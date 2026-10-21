@@ -407,6 +407,8 @@ public partial class Markdown : View, IDesignable
 
         int effectiveWidth = GetEffectiveLayoutWidth ();
 
+        // Tables retain minimum geometry and clear invisible focus even below the text-wrap minimum.
+        // Rebuilding at zero also keeps subsequent growth from reusing stale table coordinates.
         if (_layoutWidth == effectiveWidth || (effectiveWidth < MIN_WRAP_WIDTH && _blocks.All (block => !block.IsTable)))
         {
             return;

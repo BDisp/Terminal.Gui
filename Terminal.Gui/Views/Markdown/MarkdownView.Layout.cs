@@ -30,8 +30,8 @@ public partial class Markdown
             _maxLineWidth = Math.Max (_maxLineWidth, width);
         }
 
-        // The effective width for table layout: tables use Dim.Fill() against content width,
-        // so if unwrapped lines expand the content beyond the viewport, tables get that width.
+        // Freeze the table constraint before including table overflow in the document extent.
+        // Unwrapped document lines still contribute to this constraint.
         int tableLayoutWidth = Math.Max (viewportWidth, _maxLineWidth);
 
         foreach (IntermediateBlock block in _blocks)
@@ -121,7 +121,7 @@ public partial class Markdown
                 // Reserve placeholder lines so content height is correct
                 for (var i = 0; i < tableHeight; i++)
                 {
-                    _renderedLines.Add (new RenderedLine ([], false, tableView.TableLayout.Width, isTable: true, tableData: tableData)
+                    _renderedLines.Add (new RenderedLine ([], false, tableView.TableLayout.Width, isTable: true)
                     {
                         TableView = tableView,
                         TableRow = i

@@ -402,6 +402,9 @@ public sealed class MarkdownTable : View, IDesignable
         SetAttribute (normal);
         FillRect (new Rectangle (0, 0, Viewport.Width, Viewport.Height), (Rune)' ');
 
+        // Resolve each style once per draw so theme changes remain visible without per-glyph lookups.
+        Dictionary<(MarkdownStyleRole Style, VisualRole? Role, Attribute? Explicit, TextStyle Additional, string? Url), Attribute> attributes = [];
+
         foreach (MarkdownTableGlyph glyph in TableLayout.Glyphs)
         {
             int x = glyph.Position.X - Viewport.X;
@@ -412,7 +415,14 @@ public sealed class MarkdownTable : View, IDesignable
                 continue;
             }
 
-            Attribute attribute = MarkdownAttributeHelper.GetAttributeForSegment (this, glyph.Segment, SyntaxHighlighter, themeBackground);
+            StyledSegment segment = glyph.Segment;
+            (MarkdownStyleRole, VisualRole?, Attribute?, TextStyle, string?) key = (segment.StyleRole, segment.Role, segment.Attribute, segment.AdditionalStyle, segment.Url);
+
+            if (!attributes.TryGetValue (key, out Attribute attribute))
+            {
+                attribute = MarkdownAttributeHelper.GetAttributeForSegment (this, segment, SyntaxHighlighter, themeBackground);
+                attributes.Add (key, attribute);
+            }
 
             if (glyph.IsHeader)
             {
@@ -424,7 +434,7 @@ public sealed class MarkdownTable : View, IDesignable
                 attribute = new (attribute.Background, attribute.Foreground, attribute.Style);
             }
 
-            bool absolute = MarkdownAttributeHelper.TryCreateSafeAbsoluteUri (glyph.Segment.Url, out _);
+            bool absolute = glyph.LinkIndex >= 0 && TableLayout.Links [glyph.LinkIndex].IsSafeAbsolute;
 
             if (absolute && Driver is { })
             {
