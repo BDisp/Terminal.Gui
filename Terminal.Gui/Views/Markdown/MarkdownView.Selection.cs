@@ -229,6 +229,25 @@ public partial class Markdown
 
             int lineStartX = lineIdx == start.Y ? start.X : 0;
             int lineEndX = lineIdx == end.Y ? end.X : int.MaxValue;
+
+            if (line.SourceText is { Length: > 0 } sourceText && lineStartX == 0 && lineEndX >= line.Width)
+            {
+                int lastSourceLine = lineIdx;
+
+                while (lastSourceLine + 1 < _renderedLines.Count && _renderedLines [lastSourceLine + 1].SourceText == string.Empty)
+                {
+                    lastSourceLine++;
+                }
+
+                if (lastSourceLine < end.Y || (lastSourceLine == end.Y && end.X >= _renderedLines [lastSourceLine].Width))
+                {
+                    outputLines.Add (sourceText);
+                    lineIdx = lastSourceLine;
+
+                    continue;
+                }
+            }
+
             StringBuilder lineSb = new ();
             AppendLineText (lineSb, line, lineStartX, lineEndX);
             outputLines.Add (lineSb.ToString ());

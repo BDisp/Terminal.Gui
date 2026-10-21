@@ -20,7 +20,7 @@ public partial class Markdown
                 continue;
             }
 
-            int width = CalculateWidth (block.Runs.Select (r => new StyledSegment (r.Text, r.StyleRole, r.Url, r.ImageSource, r.Attribute, r.Role)).ToList ());
+            int width = CalculateWidth (MarkdownAttributeHelper.ToStyledSegments (block.Runs));
 
             if (!string.IsNullOrEmpty (block.Prefix))
             {
@@ -81,12 +81,11 @@ public partial class Markdown
                 {
                     SyntaxHighlighter = SyntaxHighlighter,
                     UseThemeBackground = UseThemeBackground,
-                    TableData = tableData,
                     X = 0,
                     Y = startLine,
                     Width = Dim.Fill ()
                 };
-                tableView.Recalculate (tableLayoutWidth);
+                tableView.SetContent (tableData, block.TableContent, tableLayoutWidth);
 
                 // Capture the rendered height BEFORE Add() — Add triggers EndInit → Layout
                 // which may recalculate the table at a stale content width, corrupting RenderedHeight.
@@ -136,9 +135,12 @@ public partial class Markdown
             }
 
             List<RenderedLine> wrapped = WrapBlock (block, viewportWidth);
+            string? sourceText = block.SourceText;
 
             foreach (RenderedLine line in wrapped)
             {
+                line.SourceText = sourceText;
+                sourceText = sourceText is null ? null : string.Empty;
                 _renderedLines.Add (line);
                 _maxLineWidth = Math.Max (_maxLineWidth, line.Width);
             }
@@ -255,14 +257,14 @@ public partial class Markdown
             segments.Add (new StyledSegment (block.Prefix, MarkdownStyleRole.ListMarker));
         }
 
-        segments.AddRange (block.Runs.Select (run => new StyledSegment (run.Text, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role)));
+        segments.AddRange (MarkdownAttributeHelper.ToStyledSegments (block.Runs));
 
         int width = CalculateWidth (segments);
 
         return new RenderedLine (segments, false, width, block.IsCodeBlock, block.IsThematicBreak, codeLanguage: block.Language);
     }
 
-    private static List<RenderedLine> WrapBlock (IntermediateBlock block, int viewportWidth)
+    internal static List<RenderedLine> WrapBlock (IntermediateBlock block, int viewportWidth)
     {
         List<RenderedLine> lines = [];
 
@@ -272,6 +274,7 @@ public partial class Markdown
         List<StyledSegment> currentSegments = [];
         var currentWidth = 0;
         var firstLine = true;
+        var endedWithHardBreak = false;
 
         if (!string.IsNullOrEmpty (firstPrefix))
         {
@@ -283,6 +286,29 @@ public partial class Markdown
         {
             foreach (string grapheme in GraphemeHelper.GetGraphemes (run.Text))
             {
+                if (grapheme == "\n")
+                {
+                    if (currentSegments.Count == 0)
+                    {
+                        currentSegments.Add (new StyledSegment ("", MarkdownStyleRole.Normal));
+                    }
+
+                    lines.Add (new RenderedLine ([.. currentSegments], true, currentWidth));
+                    currentSegments.Clear ();
+                    currentWidth = 0;
+                    firstLine = false;
+                    endedWithHardBreak = true;
+
+                    if (!string.IsNullOrEmpty (continuationPrefix))
+                    {
+                        currentSegments.Add (new StyledSegment (continuationPrefix, MarkdownStyleRole.ListMarker));
+                        currentWidth += continuationPrefix.GetColumns ();
+                    }
+
+                    continue;
+                }
+
+                endedWithHardBreak = false;
                 int graphemeWidth = Math.Max (grapheme.GetColumns (), 1);
 
                 if (currentWidth + graphemeWidth > viewportWidth && currentSegments.Count > 0)
@@ -357,9 +383,15 @@ public partial class Markdown
                     }
                 }
 
-                currentSegments.Add (new StyledSegment (grapheme, run.StyleRole, run.Url, run.ImageSource, run.Attribute, run.Role));
+                currentSegments.Add (run.ToStyledSegment (grapheme));
                 currentWidth += graphemeWidth;
             }
+        }
+
+        // A terminal hard break ends the current line; it does not start a phantom prefix-only line.
+        if (endedWithHardBreak)
+        {
+            return lines;
         }
 
         if (currentSegments.Count == 0)
