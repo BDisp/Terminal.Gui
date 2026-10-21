@@ -595,7 +595,7 @@ public partial class Markdown
                     List<InlineRun> altRuns = WalkInlines (link.FirstChild, MarkdownStyleRole.ImageAlt);
                     string altText = string.Concat (altRuns.Select (r => r.Text));
                     string fallback = MarkdownImageResolver.GetFallbackText (altText);
-                    runs.Add (new InlineRun (fallback, MarkdownStyleRole.ImageAlt, imageSource: link.Url));
+                    runs.Add (new InlineRun (fallback, MarkdownStyleRole.ImageAlt, ImageSource: link.Url));
 
                     break;
 
@@ -698,7 +698,7 @@ public partial class Markdown
     {
         if (codeLines.Count == 0)
         {
-            _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.CodeBlock, role: VisualRole.Code)], false, isCodeBlock: true, language: language));
+            _blocks.Add (new IntermediateBlock ([new InlineRun ("", MarkdownStyleRole.CodeBlock, Role: VisualRole.Code)], false, isCodeBlock: true, language: language));
 
             return;
         }
@@ -711,7 +711,7 @@ public partial class Markdown
 
             if (SyntaxHighlighter is null)
             {
-                runs = [new InlineRun (line, MarkdownStyleRole.CodeBlock, role: VisualRole.Code)];
+                runs = [new InlineRun (line, MarkdownStyleRole.CodeBlock, Role: VisualRole.Code)];
             }
             else
             {

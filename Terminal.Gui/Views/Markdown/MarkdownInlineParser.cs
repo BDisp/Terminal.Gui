@@ -241,7 +241,7 @@ internal static class MarkdownInlineParser
         string alt = text.Substring (start + 2, closeAlt - start - 2);
         string source = text.Substring (closeAlt + 2, closeSrc - closeAlt - 2);
 
-        run = new InlineRun (MarkdownImageResolver.GetFallbackText (alt), MarkdownStyleRole.ImageAlt, imageSource: source);
+        run = new InlineRun (MarkdownImageResolver.GetFallbackText (alt), MarkdownStyleRole.ImageAlt, ImageSource: source);
         tokenLength = closeSrc - start + 1;
 
         return true;
