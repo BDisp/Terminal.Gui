@@ -15,7 +15,8 @@ namespace Terminal.Gui.Views;
 ///     </para>
 ///     <para>
 ///         Header cells are bold; body cells support inline Markdown formatting (bold, italic, code,
-///         links) via <see cref="MarkdownInlineParser"/>. Column alignment (left, center, right)
+///         links). Tables created by <see cref="Markdown"/> retain parsed inline segments; standalone
+///         text uses <see cref="MarkdownInlineParser"/>. Column alignment (left, center, right)
 ///         parsed from the Markdown separator row is respected. Cells that exceed their column width
 ///         are word-wrapped, and row heights expand to accommodate wrapped content.
 ///     </para>
@@ -26,6 +27,8 @@ namespace Terminal.Gui.Views;
 /// </remarks>
 public sealed class MarkdownTable : View, IDesignable
 {
+    internal MarkdownTableContent Content { get; private set; } = new ([], []);
+
     private TableData _data = _emptyData;
     private int [] _columnWidths = [];
 
@@ -150,27 +153,23 @@ public sealed class MarkdownTable : View, IDesignable
     public TableData TableData
     {
         get => _data;
-        set
-        {
-            _data = value;
-            _headerSegments = ParseCellSegments (value.Headers, MarkdownStyleRole.Heading);
-            _rowSegments = new List<StyledSegment> [value.Rows.Length] [];
+        set => SetContent (value, null, Frame.Width > 0 ? Frame.Width : 80);
+    }
 
-            for (var r = 0; r < value.Rows.Length; r++)
-            {
-                _rowSegments [r] = ParseCellSegments (value.Rows [r], MarkdownStyleRole.Normal);
-            }
+    internal void SetContent (TableData data, MarkdownTableContent? content, int width)
+    {
+        _data = data;
+        Content = content ?? new (ParseCellSegments (data.Headers, MarkdownStyleRole.Heading),
+                                  [.. data.Rows.Select (row => ParseCellSegments (row, MarkdownStyleRole.Normal))]);
+        _headerSegments = Content.Headers;
+        _rowSegments = Content.Rows;
 
-            // Keep Text in sync with TableData
-            SetTextDirect (BuildTableText ());
-
-            // Compute initial layout using current Frame width (or a default for standalone use)
-            int initialWidth = Frame.Width > 0 ? Frame.Width : 80;
-            _lastComputedWidth = -1;
-            Recalculate (initialWidth);
-            SetNeedsLayout ();
-            SetNeedsDraw ();
-        }
+        // Keep Text in sync without parsing or laying out discarded intermediate content.
+        SetTextDirect (BuildTableText ());
+        _lastComputedWidth = -1;
+        Recalculate (width);
+        SetNeedsLayout ();
+        SetNeedsDraw ();
     }
 
     /// <summary>Recalculates column widths and row heights for the given available width.</summary>
@@ -182,7 +181,7 @@ public sealed class MarkdownTable : View, IDesignable
         }
 
         _lastComputedWidth = maxWidth;
-        _columnWidths = ComputeColumnWidths (_data, maxWidth);
+        _columnWidths = ComputeColumnWidths (Content, maxWidth);
 
         _headerRowHeight = ComputeRowHeight (_headerSegments, _columnWidths);
 
@@ -710,74 +709,55 @@ public sealed class MarkdownTable : View, IDesignable
 
         List<List<StyledSegment>> lines = [];
         List<StyledSegment> currentLine = [];
+        List<StyledSegment> word = [];
         var currentWidth = 0;
 
         foreach (StyledSegment segment in segments)
         {
-            string remaining = segment.Text;
+            var start = 0;
 
-            while (remaining.Length > 0)
+            for (var index = 0; index < segment.Text.Length; index++)
             {
-                int spaceIdx = remaining.IndexOf (' ');
-                string word;
-                string trailing;
+                char character = segment.Text [index];
 
-                if (spaceIdx >= 0)
+                if (character is not (' ' or '\t' or '\n'))
                 {
-                    word = remaining [..spaceIdx];
-                    trailing = " ";
-                    remaining = remaining [(spaceIdx + 1)..];
-                }
-                else
-                {
-                    word = remaining;
-                    trailing = "";
-                    remaining = "";
+                    continue;
                 }
 
-                string chunk = word + trailing;
-                int chunkWidth = chunk.GetColumns ();
-
-                // If adding this word would exceed the line, wrap
-                if (currentWidth > 0 && currentWidth + chunkWidth > maxWidth)
+                if (index > start)
                 {
-                    lines.Add (currentLine);
-                    currentLine = [];
-                    currentWidth = 0;
+                    word.Add (segment.WithText (segment.Text [start..index]));
                 }
 
-                // If a single word is wider than maxWidth, hard-break it
-                if (chunkWidth > maxWidth && currentWidth == 0)
+                FlushWord ();
+                start = index + 1;
+
+                if (character == '\n')
                 {
-                    string hardChunk = TruncateToWidth (chunk, maxWidth);
-
-                    // If maxWidth is too narrow for even one grapheme, take the first grapheme
-                    // to guarantee forward progress and avoid an infinite loop.
-                    if (hardChunk.Length == 0)
-                    {
-                        string firstGrapheme = GraphemeHelper.GetGraphemes (chunk).FirstOrDefault () ?? chunk [..1];
-                        hardChunk = firstGrapheme;
-                    }
-
-                    currentLine.Add (new StyledSegment (hardChunk, segment.StyleRole, segment.Url, segment.ImageSource, segment.Attribute, segment.Role));
-                    lines.Add (currentLine);
-                    currentLine = [];
-                    currentWidth = 0;
-
-                    int usedChars = hardChunk.TrimEnd ().Length;
-                    remaining = chunk [usedChars..].TrimStart () + remaining;
+                    FlushLine ();
 
                     continue;
                 }
 
-                currentLine.Add (new StyledSegment (chunk, segment.StyleRole, segment.Url, segment.ImageSource, segment.Attribute, segment.Role));
-                currentWidth += chunkWidth;
+                if (currentWidth < maxWidth)
+                {
+                    currentLine.Add (segment.WithText (" "));
+                    currentWidth++;
+                }
+            }
+
+            if (start < segment.Text.Length)
+            {
+                word.Add (segment.WithText (segment.Text [start..]));
             }
         }
 
+        FlushWord ();
+
         if (currentLine.Count > 0)
         {
-            lines.Add (currentLine);
+            FlushLine ();
         }
 
         if (lines.Count == 0)
@@ -786,6 +766,60 @@ public sealed class MarkdownTable : View, IDesignable
         }
 
         return lines;
+
+        void FlushLine ()
+        {
+            lines.Add (currentLine);
+            currentLine = [];
+            currentWidth = 0;
+        }
+
+        void FlushWord ()
+        {
+            if (word.Count == 0)
+            {
+                return;
+            }
+
+            int wordWidth = string.Concat (word.Select (part => part.Text)).GetColumns ();
+
+            if (currentWidth > 0 && currentWidth + wordWidth > maxWidth)
+            {
+                FlushLine ();
+            }
+
+            foreach (StyledSegment part in word)
+            {
+                string remaining = part.Text;
+
+                while (remaining.Length > 0)
+                {
+                    int remainingWidth = remaining.GetColumns ();
+                    string chunk = remainingWidth == 0 || remainingWidth <= maxWidth - currentWidth
+                                       ? remaining
+                                       : TruncateToWidth (remaining, maxWidth - currentWidth);
+
+                    if (chunk.Length == 0 && currentWidth > 0)
+                    {
+                        FlushLine ();
+
+                        continue;
+                    }
+
+                    // Keep a wide grapheme intact even when the column is narrower than it.
+                    if (chunk.Length == 0)
+                    {
+                        chunk = GraphemeHelper.GetGraphemes (remaining).First ();
+                    }
+
+                    currentLine.Add (part.WithText (chunk));
+                    currentWidth += chunk.GetColumns ();
+                    remaining = remaining [chunk.Length..];
+                }
+            }
+
+            word.Clear ();
+        }
     }
 
     private static List<StyledSegment> [] ParseCellSegments (string [] cells, MarkdownStyleRole defaultRole)
@@ -833,7 +867,7 @@ public sealed class MarkdownTable : View, IDesignable
     /// <summary>
     ///     Computes column widths using a Rich-style collapse algorithm:
     ///     <list type="number">
-    ///         <item>Measure each column's min (longest word + padding) and max (full content + padding) widths.</item>
+    ///         <item>Use each column's cached min (longest word + padding) and max (full content + padding) widths.</item>
     ///         <item>If total max fits within <paramref name="maxWidth"/>, use max widths.</item>
     ///         <item>
     ///             Otherwise, iteratively collapse the widest column toward the second-widest.
@@ -843,31 +877,11 @@ public sealed class MarkdownTable : View, IDesignable
     ///         <item>Last resort: reduce all columns evenly if still over budget.</item>
     ///     </list>
     /// </summary>
-    internal static int [] ComputeColumnWidths (TableData data, int maxWidth)
+    internal static int [] ComputeColumnWidths (MarkdownTableContent content, int maxWidth)
     {
-        int cols = data.ColumnCount;
-        var maxWidths = new int [cols];
-        var minWidths = new int [cols];
-
-        // Measure max (full content) and min (longest word) for each column
-        for (var c = 0; c < cols; c++)
-        {
-            int headerMax = MeasureRenderedWidth (data.Headers [c]);
-            int headerMin = MeasureLongestWord (data.Headers [c]);
-            maxWidths [c] = headerMax;
-            minWidths [c] = headerMin;
-        }
-
-        foreach (string [] row in data.Rows)
-        {
-            for (var c = 0; c < cols && c < row.Length; c++)
-            {
-                int cellMax = MeasureRenderedWidth (row [c]);
-                int cellMin = MeasureLongestWord (row [c]);
-                maxWidths [c] = Math.Max (maxWidths [c], cellMax);
-                minWidths [c] = Math.Max (minWidths [c], cellMin);
-            }
-        }
+        int cols = content.Headers.Length;
+        int [] maxWidths = [.. content.MaximumWidths];
+        int [] minWidths = [.. content.MinimumWidths];
 
         // Add padding (1 space each side)
         for (var c = 0; c < cols; c++)
@@ -1042,41 +1056,17 @@ public sealed class MarkdownTable : View, IDesignable
         }
     }
 
-    /// <summary>Measures the display width of a cell's rendered text (stripping markdown formatting).</summary>
-    internal static int MeasureRenderedWidth (string cellText)
+    /// <summary>Measure the display width of a cell's styled content.</summary>
+    internal static int MeasureRenderedWidth (IReadOnlyList<StyledSegment> segments) =>
+        Math.Max (string.Concat (segments.Select (segment => segment.Text)).Split ('\n').Max (line => line.GetColumns ()), 1);
+
+    /// <summary>Measure the longest displayed word across inline style boundaries.</summary>
+    internal static int MeasureLongestWord (IReadOnlyList<StyledSegment> segments)
     {
-        List<InlineRun> runs = MarkdownInlineParser.ParseInlines (cellText, MarkdownStyleRole.Normal);
-        var width = 0;
+        string text = string.Concat (segments.Select (segment => segment.Text));
+        string [] words = text.Split ([' ', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries);
 
-        foreach (InlineRun run in runs)
-        {
-            width += run.Text.GetColumns ();
-        }
-
-        return Math.Max (width, 1);
-    }
-
-    /// <summary>
-    ///     Measures the display width of the longest single word in a cell's rendered text.
-    ///     This determines the minimum column width (below which words would be hard-broken).
-    /// </summary>
-    internal static int MeasureLongestWord (string cellText)
-    {
-        List<InlineRun> runs = MarkdownInlineParser.ParseInlines (cellText, MarkdownStyleRole.Normal);
-        var longest = 1;
-
-        foreach (InlineRun run in runs)
-        {
-            string [] words = run.Text.Split (' ', StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (string word in words)
-            {
-                int w = word.GetColumns ();
-                longest = Math.Max (longest, w);
-            }
-        }
-
-        return longest;
+        return words.Length == 0 ? 1 : Math.Max (words.Max (word => word.GetColumns ()), 1);
     }
 
     private static int CalculateLeftPadding (int cellWidth, int textWidth, Alignment alignment)
