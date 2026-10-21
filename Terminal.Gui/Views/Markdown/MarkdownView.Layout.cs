@@ -83,9 +83,11 @@ public partial class Markdown
                     UseThemeBackground = UseThemeBackground,
                     X = 0,
                     Y = startLine,
-                    Width = Dim.Fill ()
+                    LayoutConstraint = tableLayoutWidth
                 };
                 tableView.SetContent (tableData, block.TableContent, tableLayoutWidth);
+                tableView.Width = tableView.TableLayout.Width;
+                _maxLineWidth = Math.Max (_maxLineWidth, tableView.TableLayout.Width);
 
                 // Capture the rendered height BEFORE Add() — Add triggers EndInit → Layout
                 // which may recalculate the table at a stale content width, corrupting RenderedHeight.
@@ -119,7 +121,11 @@ public partial class Markdown
                 // Reserve placeholder lines so content height is correct
                 for (var i = 0; i < tableHeight; i++)
                 {
-                    _renderedLines.Add (new RenderedLine ([new StyledSegment ("", MarkdownStyleRole.Table)], false, 0, isTable: true, tableData: tableData));
+                    _renderedLines.Add (new RenderedLine ([], false, tableView.TableLayout.Width, isTable: true, tableData: tableData)
+                    {
+                        TableView = tableView,
+                        TableRow = i
+                    });
                 }
 
                 continue;
@@ -160,7 +166,7 @@ public partial class Markdown
         // via Tab without stealing focus during layout.
         foreach (MarkdownTable table in _tableViews)
         {
-            if (!table.HasLinks)
+            if (!table.HasLinks || GetEffectiveLayoutWidth () < MIN_WRAP_WIDTH)
             {
                 continue;
             }

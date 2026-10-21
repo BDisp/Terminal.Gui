@@ -22,4 +22,7 @@ internal sealed class RenderedLine (IReadOnlyList<StyledSegment> segments, bool 
     ///     when this line falls within a partial selection.
     /// </summary>
     public TableData? TableData { get; } = tableData;
+
+    internal MarkdownTable? TableView { get; init; }
+    internal int TableRow { get; init; }
 }

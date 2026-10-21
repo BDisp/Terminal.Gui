@@ -1,8 +1,6 @@
 using Markdig;
 using Markdig.Extensions.Tables;
-using Markdig.Syntax;
 using UnitTests;
-using TgMarkdown = Terminal.Gui.Views.Markdown;
 
 namespace ViewsTests.Markdown;
 
