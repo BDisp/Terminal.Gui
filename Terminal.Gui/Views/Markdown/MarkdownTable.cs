@@ -709,91 +709,55 @@ public sealed class MarkdownTable : View, IDesignable
 
         List<List<StyledSegment>> lines = [];
         List<StyledSegment> currentLine = [];
+        List<StyledSegment> word = [];
         var currentWidth = 0;
 
         foreach (StyledSegment segment in segments)
         {
-            if (segment.Text == "\n")
+            var start = 0;
+
+            for (var index = 0; index < segment.Text.Length; index++)
             {
-                lines.Add (currentLine);
-                currentLine = [];
-                currentWidth = 0;
+                char character = segment.Text [index];
 
-                continue;
-            }
-
-            string remaining = segment.Text;
-
-            while (remaining.Length > 0)
-            {
-                int spaceIdx = remaining.IndexOfAny ([' ', '\t', '\n']);
-                bool endsLine = spaceIdx >= 0 && remaining [spaceIdx] == '\n';
-                string word;
-                string trailing;
-
-                if (spaceIdx >= 0)
+                if (character is not (' ' or '\t' or '\n'))
                 {
-                    word = remaining [..spaceIdx];
-                    trailing = endsLine ? string.Empty : " ";
-                    remaining = remaining [(spaceIdx + 1)..];
-                }
-                else
-                {
-                    word = remaining;
-                    trailing = "";
-                    remaining = "";
+                    continue;
                 }
 
-                string chunk = word + trailing;
-                int chunkWidth = chunk.GetColumns ();
-
-                // If adding this word would exceed the line, wrap
-                if (currentWidth > 0 && currentWidth + chunkWidth > maxWidth)
+                if (index > start)
                 {
-                    lines.Add (currentLine);
-                    currentLine = [];
-                    currentWidth = 0;
+                    word.Add (segment.WithText (segment.Text [start..index]));
                 }
 
-                // If a single word is wider than maxWidth, hard-break it
-                if (chunkWidth > maxWidth && currentWidth == 0)
+                FlushWord ();
+                start = index + 1;
+
+                if (character == '\n')
                 {
-                    string hardChunk = TruncateToWidth (chunk, maxWidth);
-
-                    // If maxWidth is too narrow for even one grapheme, take the first grapheme
-                    // to guarantee forward progress and avoid an infinite loop.
-                    if (hardChunk.Length == 0)
-                    {
-                        string firstGrapheme = GraphemeHelper.GetGraphemes (chunk).FirstOrDefault () ?? chunk [..1];
-                        hardChunk = firstGrapheme;
-                    }
-
-                    currentLine.Add (segment.WithText (hardChunk));
-                    lines.Add (currentLine);
-                    currentLine = [];
-                    currentWidth = 0;
-
-                    int usedChars = hardChunk.TrimEnd ().Length;
-                    remaining = chunk [usedChars..].TrimStart () + (endsLine ? "\n" : string.Empty) + remaining;
+                    FlushLine ();
 
                     continue;
                 }
 
-                currentLine.Add (segment.WithText (chunk));
-                currentWidth += chunkWidth;
-
-                if (endsLine)
+                if (currentWidth < maxWidth)
                 {
-                    lines.Add (currentLine);
-                    currentLine = [];
-                    currentWidth = 0;
+                    currentLine.Add (segment.WithText (" "));
+                    currentWidth++;
                 }
+            }
+
+            if (start < segment.Text.Length)
+            {
+                word.Add (segment.WithText (segment.Text [start..]));
             }
         }
 
+        FlushWord ();
+
         if (currentLine.Count > 0)
         {
-            lines.Add (currentLine);
+            FlushLine ();
         }
 
         if (lines.Count == 0)
@@ -802,6 +766,60 @@ public sealed class MarkdownTable : View, IDesignable
         }
 
         return lines;
+
+        void FlushLine ()
+        {
+            lines.Add (currentLine);
+            currentLine = [];
+            currentWidth = 0;
+        }
+
+        void FlushWord ()
+        {
+            if (word.Count == 0)
+            {
+                return;
+            }
+
+            int wordWidth = string.Concat (word.Select (part => part.Text)).GetColumns ();
+
+            if (currentWidth > 0 && currentWidth + wordWidth > maxWidth)
+            {
+                FlushLine ();
+            }
+
+            foreach (StyledSegment part in word)
+            {
+                string remaining = part.Text;
+
+                while (remaining.Length > 0)
+                {
+                    int remainingWidth = remaining.GetColumns ();
+                    string chunk = remainingWidth == 0 || remainingWidth <= maxWidth - currentWidth
+                                       ? remaining
+                                       : TruncateToWidth (remaining, maxWidth - currentWidth);
+
+                    if (chunk.Length == 0 && currentWidth > 0)
+                    {
+                        FlushLine ();
+
+                        continue;
+                    }
+
+                    // Keep a wide grapheme intact even when the column is narrower than it.
+                    if (chunk.Length == 0)
+                    {
+                        chunk = GraphemeHelper.GetGraphemes (remaining).First ();
+                    }
+
+                    currentLine.Add (part.WithText (chunk));
+                    currentWidth += chunk.GetColumns ();
+                    remaining = remaining [chunk.Length..];
+                }
+            }
+
+            word.Clear ();
+        }
     }
 
     private static List<StyledSegment> [] ParseCellSegments (string [] cells, MarkdownStyleRole defaultRole)
