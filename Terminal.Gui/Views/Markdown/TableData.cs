@@ -1,8 +1,8 @@
 namespace Terminal.Gui.Views;
 
-/// <summary>Represent a Markdown table's cell sources and column alignments.</summary>
+/// <summary>Represents a Markdown table's cell sources and column alignments.</summary>
 /// <remarks>
-///     Store header and body cells as Markdown inline source, including escapes needed to preserve literal text.
+///     Header and body cells contain Markdown inline source, including escapes needed to preserve literal text.
 ///     These strings are not display text. Tables lowered from an AST serialize supported inline formatting;
 ///     the resulting source can differ from the input while retaining its rendered content and styles.
 /// </remarks>
@@ -20,13 +20,13 @@ public sealed class TableData
         ColumnCount = headers.Length;
     }
 
-    /// <summary>Get the header cells as Markdown inline source.</summary>
+    /// <summary>Gets the header cells as Markdown inline source.</summary>
     public string [] Headers { get; }
 
     /// <summary>Gets the alignment for each column, parsed from the separator row.</summary>
     public Alignment [] ColumnAlignments { get; }
 
-    /// <summary>Get the body rows. Each cell contains Markdown inline source.</summary>
+    /// <summary>Gets the body rows. Each cell contains Markdown inline source.</summary>
     public string [] [] Rows { get; }
 
     /// <summary>Gets the number of columns in the table.</summary>
