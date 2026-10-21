@@ -16,6 +16,8 @@ public partial class Markdown
 {
     private static readonly MarkdownPipeline _defaultPipeline = new MarkdownPipelineBuilder ().UseAdvancedExtensions ().Build ();
     private static readonly Regex _htmlTagPattern = new ("<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex _codeBacktickPattern = new ("`+", RegexOptions.Compiled);
+    private static readonly Regex _cellUnderscorePattern = new (@"(?<!\w)_|_(?!\w)", RegexOptions.Compiled);
 
     private Dictionary<string, int> _slugCounts = new (StringComparer.OrdinalIgnoreCase);
 
@@ -427,7 +429,7 @@ public partial class Markdown
                     break;
 
                 case CodeInline code:
-                    int backticks = Regex.Matches (code.Content, "`+").Select (match => match.Length).DefaultIfEmpty (0).Max ();
+                    int backticks = _codeBacktickPattern.Matches (code.Content).Select (match => match.Length).DefaultIfEmpty (0).Max ();
                     string delimiter = new ('`', backticks + 1);
                     bool padCode = code.Content.StartsWith ('`') || code.Content.EndsWith ('`')
                                    || (code.Content.StartsWith (' ') && code.Content.EndsWith (' ') && !string.IsNullOrWhiteSpace (code.Content));
@@ -516,7 +518,7 @@ public partial class Markdown
     private static string EscapeCellLiteral (string text, bool inLinkLabel, bool followedByLink = false)
     {
         StringBuilder escaped = new ();
-        bool escapeUnderscores = Regex.IsMatch (text, @"(?<!\w)_|_(?!\w)");
+        bool escapeUnderscores = _cellUnderscorePattern.IsMatch (text);
         bool escapeBrackets = inLinkLabel || text.Contains ("](", StringComparison.Ordinal);
 
         for (int index = 0; index < text.Length; index++)
