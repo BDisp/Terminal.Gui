@@ -31,6 +31,7 @@ internal static class MarkdownInlineParser
             Lines = new StringLineGroup (text)
         };
         document.Add (paragraph);
+
         // Retain spans so unsupported inline leaves can fall back to their original source.
         InlineProcessor processor = new (document, _parsers, true, null);
 
