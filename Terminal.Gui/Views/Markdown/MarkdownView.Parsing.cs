@@ -108,6 +108,22 @@ public partial class Markdown
 
                 break;
 
+            case DefinitionList definitions:
+                foreach (Block item in definitions)
+                {
+                    int previousCount = _blocks.Count;
+                    WalkBlock (item, prefix, contPrefix, defaultRole);
+
+                    if (_blocks.Count == previousCount)
+                    {
+                        continue;
+                    }
+
+                    prefix = contPrefix;
+                }
+
+                break;
+
             case DefinitionItem definition:
                 foreach (Block content in definition)
                 {
@@ -538,15 +554,7 @@ public partial class Markdown
         {
             foreach (Block child in container)
             {
-                int previousCount = _blocks.Count;
                 WalkBlock (child, prefix, contPrefix, defaultRole);
-
-                if (_blocks.Count == previousCount)
-                {
-                    continue;
-                }
-
-                prefix = contPrefix;
             }
         }
     }
