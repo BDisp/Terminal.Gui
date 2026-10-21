@@ -154,9 +154,9 @@ public partial class Markdown
 
             case AlertBlock alert:
                 // Markdig accepts custom alphabetic kinds; retain their names and markers too.
-                string kind = alert.Kind.ToString ().ToUpperInvariant ();
+                string kind = alert.Kind.ToString ();
                 string marker = TranslateListMarkerText (prefix + "> ") + $"[!{kind}]";
-                _blocks.Add (new IntermediateBlock ([new InlineRun (kind, MarkdownStyleRole.Strong)], true, prefix + "> ", contPrefix + "> ", sourceText: marker));
+                _blocks.Add (new IntermediateBlock ([new InlineRun (kind.ToUpperInvariant (), MarkdownStyleRole.Strong)], true, prefix + "> ", contPrefix + "> ", sourceText: marker));
 
                 foreach (Block content in alert)
                 {

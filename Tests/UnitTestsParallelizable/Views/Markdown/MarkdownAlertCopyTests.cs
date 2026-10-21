@@ -8,6 +8,8 @@ public class MarkdownAlertCopyTests
     [Theory]
     [InlineData ("WARNING")]
     [InlineData ("CUSTOM")]
+    [InlineData ("Note")]
+    [InlineData ("custom")]
     public void Partial_Selection_Preserves_Alert_Marker (string kind)
     {
         using TgMarkdown view = new ()
