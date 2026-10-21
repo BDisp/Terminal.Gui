@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Tables;
@@ -22,7 +23,28 @@ public class MarkdownDependencyRegressionTests
     {
         string [] lines = RenderLines ("First\n: one\n~ two\n\nSecond\n: three");
 
-        Assert.Equal (["First", "  one", "  two", "Second", "  three"], lines.Where (line => line.Length > 0));
+        Assert.Equal (["First", "  one", "  two", "Second", "  three"], lines);
+    }
+
+    [Theory]
+    [InlineData ("\n", "")]
+    [InlineData ("\r\n", "")]
+    [InlineData ("\n", "\n")]
+    public void DefinitionList_Spacing_Before_Heading_Matches_Source (string newline, string blankLine)
+    {
+        string source = $"Term{newline}: def{newline}{blankLine}# Heading";
+        string [] expected = blankLine.Length == 0 ? ["Term", "  def", "  # Heading"] : ["Term", "  def", "", "# Heading"];
+
+        Assert.Equal (expected, RenderLines (source));
+    }
+
+    [Fact]
+    public void DefinitionList_End_Line_Includes_The_Definition ()
+    {
+        Markdig.Syntax.MarkdownDocument document = Markdig.Markdown.Parse ("Term\n: def", new MarkdownPipelineBuilder ().UseAdvancedExtensions ().Build ());
+        MethodInfo getEndLine = typeof (Terminal.Gui.Views.Markdown).GetMethod ("GetBlockEndLine", BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        Assert.Equal (1, getEndLine.Invoke (null, [Assert.Single (document)]));
     }
 
     [Fact]

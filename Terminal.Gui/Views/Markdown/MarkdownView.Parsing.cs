@@ -737,6 +737,8 @@ public partial class Markdown
             QuoteBlock qb => qb.Count > 0 ? GetBlockEndLine (qb [^1]) : qb.Line,
             ListBlock lb => lb.Count > 0 ? GetBlockEndLine (lb [^1]) : lb.Line,
             ListItemBlock lib => lib.Count > 0 ? GetBlockEndLine (lib [^1]) : lib.Line,
+            DefinitionList definitions => definitions.Count > 0 ? GetBlockEndLine (definitions [^1]) : definitions.Line,
+            DefinitionItem definition => definition.Count > 0 ? GetBlockEndLine (definition [^1]) : definition.Line,
             Table t => t.Count > 0 ? GetBlockEndLine (t [^1]) : t.Line,
             _ => block.Line
         };
