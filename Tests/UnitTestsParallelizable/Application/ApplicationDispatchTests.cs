@@ -1699,4 +1699,42 @@ public class ApplicationDispatchTests
 
         return queued!;
     }
+
+    // Regression: a Post that arrives only after the final session has ended must not
+    // sit on the toolkit queue forever; it falls back to the thread pool (#5636 / #5680).
+    [Fact]
+    public void Post_AfterFinalSessionEnds_RunsOnThreadPool ()
+    {
+        IApplication app = Application.Create ().Init (DriverRegistry.Names.ANSI);
+        Runnable runnable = new ();
+        SessionToken owner = app.Begin (runnable)!;
+        SynchronizationContext context = ((ApplicationImpl)app).SynchronizationContext!;
+
+        app.End (owner);
+
+        try
+        {
+            using ManualResetEventSlim ran = new (false);
+            int? callbackThreadId = null;
+
+            // No running session and no pump: Post must not require DrainDispatches / RunIteration.
+            context.Post (
+                          _ =>
+                          {
+                              callbackThreadId = Thread.CurrentThread.ManagedThreadId;
+                              ran.Set ();
+                          },
+                          null);
+
+            Assert.True (ran.Wait (TimeSpan.FromSeconds (5), TestContext.Current.CancellationToken));
+            Assert.NotNull (callbackThreadId);
+            Assert.NotEqual (app.MainThreadId, callbackThreadId);
+            Assert.Equal (0, ((ApplicationImpl)app).QueuedPostCount);
+        }
+        finally
+        {
+            runnable.Dispose ();
+            app.Dispose ();
+        }
+    }
 }
