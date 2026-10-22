@@ -238,6 +238,11 @@ public interface IApplication : IDisposable
     ///         <see cref="End(SessionToken)"/>.
     ///     </para>
     ///     <para>
+    ///         Without <see cref="Run(IRunnable, Func{Exception, bool})"/>, nothing drains work posted from other threads.
+    ///         <see cref="Invoke(Action)"/> queues work for the UI thread, but that work still runs only when the UI thread
+    ///         iterates — an idle Begin-only session does not process it.
+    ///     </para>
+    ///     <para>
     ///         In RELEASE builds: When <paramref name="errorHandler"/> is <see langword="null"/> any exceptions will be
     ///         rethrown. Otherwise, <paramref name="errorHandler"/> will be called. If <paramref name="errorHandler"/>
     ///         returns <see langword="true"/> the main loop will resume; otherwise this method will exit.
