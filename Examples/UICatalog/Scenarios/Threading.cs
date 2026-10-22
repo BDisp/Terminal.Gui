@@ -173,9 +173,6 @@ public class Threading : Scenario
         win.IsModalChanged += WinLoaded;
 
         app.Run (win);
-
-        // Press Esc to ends the session after pressing the button "Cancelable Load Items" without pressing the button again to cancel, then cancel the in-flight load here.
-        _cancellationTokenSource?.Cancel ();
     }
 
     private bool LogTimeout ()
