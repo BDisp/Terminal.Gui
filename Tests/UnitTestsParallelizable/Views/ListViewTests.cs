@@ -1380,7 +1380,7 @@ Five ",
     }
 
     [Fact]
-    public async Task SetSourceAsync_Null_Then_Shorter_Source_Resets_Selection_And_Shows_Items ()
+    public void SetSourceAsync_Null_Then_Shorter_Source_Resets_Selection_And_Shows_Items ()
     {
         IApplication app = Application.Create ();
         app.Init (DriverRegistry.Names.ANSI);
@@ -1417,14 +1417,14 @@ Five ",
 
             // Complete on the thread pool — do not resume on MainLoopSyncContext (Begin may
             // install it; nothing pumps here).
-            await lv.SetSourceAsync<string> (null).ConfigureAwait (false);
+            Assert.True (lv.SetSourceAsync<string> (null).Wait (TimeSpan.FromSeconds (5)));
 
             Assert.NotNull (lv.Source); // empty ListWrapper, not a null Source
             Assert.Equal (0, lv.Source!.Count);
             Assert.Null (lv.SelectedItem); // enable once SelectedItem clears correctly
 
             ObservableCollection<string> shortSource = ["A", "B", "C"];
-            await lv.SetSourceAsync (shortSource).ConfigureAwait (false);
+            Assert.True (lv.SetSourceAsync (shortSource).Wait (TimeSpan.FromSeconds (5)));
 
             app.LayoutAndDraw ();
 
