@@ -1380,7 +1380,7 @@ Five ",
     }
 
     [Fact]
-    public void SetSourceAsync_Null_Then_Shorter_Source_Resets_Selection_And_Shows_Items ()
+    public async Task SetSourceAsync_Null_Then_Shorter_Source_Resets_Selection_And_Shows_Items ()
     {
         IApplication app = Application.Create ();
         app.Init (DriverRegistry.Names.ANSI);
@@ -1417,14 +1417,14 @@ Five ",
 
             // Complete on the thread pool — do not resume on MainLoopSyncContext (Begin may
             // install it; nothing pumps here).
-            Assert.True (lv.SetSourceAsync<string> (null).Wait (TimeSpan.FromSeconds (5)));
+            await AwaitWithoutUiContextAsync (lv.SetSourceAsync<string> (null));
 
             Assert.NotNull (lv.Source); // empty ListWrapper, not a null Source
             Assert.Equal (0, lv.Source!.Count);
             Assert.Null (lv.SelectedItem); // enable once SelectedItem clears correctly
 
             ObservableCollection<string> shortSource = ["A", "B", "C"];
-            Assert.True (lv.SetSourceAsync (shortSource).Wait (TimeSpan.FromSeconds (5)));
+            await AwaitWithoutUiContextAsync (lv.SetSourceAsync (shortSource));
 
             app.LayoutAndDraw ();
 
@@ -1453,6 +1453,25 @@ Five ",
         {
             top.Dispose ();
             app.Dispose ();
+        }
+    }
+
+    /// <summary>
+    /// Awaits thread-pool work without posting the continuation to MainLoopSyncContext
+    /// (which nothing pumps in this test) and without ConfigureAwait(false) (xUnit1030).
+    /// </summary>
+    private static async Task AwaitWithoutUiContextAsync (Task task)
+    {
+        SynchronizationContext? old = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext (null);
+
+        try
+        {
+            await task.WaitAsync (TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext (old);
         }
     }
 
